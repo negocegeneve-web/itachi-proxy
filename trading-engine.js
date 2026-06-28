@@ -1,6 +1,4 @@
 // trading-engine.js
-// Bot serveur 24/7 avec agents Ruflo
-
 const { TradingSwarm } = require('./ruflo-trader');
 const https = require('https');
 const crypto = require('crypto');
@@ -19,7 +17,8 @@ class TradingEngine {
     
     this.swarm = new TradingSwarm();
     this.priceHistory = [];
-    this.trades = [];
+    this.openTrades = [];
+    this.closedTrades = [];
     this.capital = this.config.capital;
     this.startCapital = this.config.capital;
     this.running = false;
@@ -58,7 +57,48 @@ class TradingEngine {
     // Signal Ruflo - seulement après 30 prix
     if (this.priceHistory.length >= 30) {
       try {
-        const sig = this.swarm.coordinate(this.priceHistory, { capital: this.capital, trades: this.trades });
+        const sig = this.swarm.coordinate(this.priceHistory, { capital: this.capital, trades: this.openTrades });
+        
+        // Simulation: Ouvre trade si signal fort (Q >= 55)
+        if (sig.action === 'BUY' && sig.q >= 55 && this.openTrades.length === 0) {
+          const stake = Math.round(this.capital * 0.08);
+          const qty = stake / price;
+          const trade = {
+            id: Date.now(),
+            entry: price,
+            qty,
+            sl: price * 0.985,
+            tp: price * 1.02,
+            direction: 'LONG',
+            openTime: Date.now(),
+            signal: sig.action,
+            quality: sig.q
+          };
+          this.openTrades.push(trade);
+          console.log(`🎯 TRADE OPENED | Entry: $${price} | Q:${sig.q}`);
+        }
+
+        // Gère les trades ouverts (SL/TP)
+        this.openTrades = this.openTrades.filter(trade => {
+          if (trade.direction === 'LONG') {
+            if (price <= trade.sl) {
+              const pnl = (trade.sl - trade.entry) * trade.qty;
+              this.closedTrades.push({...trade, exit: trade.sl, closeTime: Date.now(), pnl, status: 'SL'});
+              this.capital += pnl;
+              console.log(`❌ STOP LOSS | PnL: $${pnl.toFixed(2)}`);
+              return false;
+            }
+            if (price >= trade.tp) {
+              const pnl = (trade.tp - trade.entry) * trade.qty;
+              this.closedTrades.push({...trade, exit: trade.tp, closeTime: Date.now(), pnl, status: 'TP'});
+              this.capital += pnl;
+              console.log(`✅ TAKE PROFIT | PnL: $${pnl.toFixed(2)}`);
+              return false;
+            }
+          }
+          return true;
+        });
+
         console.log(`💹 ${this.config.asset}: $${price} | Signal: ${sig.action} | Q:${sig.q} | Lev:${sig.leverage}`);
       } catch(e) {
         console.error(`⚠️  Swarm error: ${e.message}`);
@@ -86,6 +126,25 @@ class TradingEngine {
   stop() {
     this.running = false;
     console.log(`⏸️  Trading Engine STOPPED`);
+  }
+
+  getStats() {
+    const totalTrades = this.closedTrades.length;
+    const winTrades = this.closedTrades.filter(t => t.pnl > 0).length;
+    const lossTrades = this.closedTrades.filter(t => t.pnl < 0).length;
+    const totalPnL = this.closedTrades.reduce((sum, t) => sum + t.pnl, 0);
+    const winRate = totalTrades > 0 ? (winTrades / totalTrades * 100).toFixed(1) : 0;
+
+    return {
+      openTrades: this.openTrades.length,
+      closedTrades: totalTrades,
+      winTrades,
+      lossTrades,
+      totalPnL: parseFloat(totalPnL.toFixed(2)),
+      winRate: parseFloat(winRate),
+      capital: this.capital,
+      running: this.running
+    };
   }
 }
 
