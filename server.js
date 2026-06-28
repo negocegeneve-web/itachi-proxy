@@ -43,23 +43,28 @@ http.createServer((req, res) => {
     return;
   }
 
-  // Get bot trades state
+  // Get bot trades state + stats
   if (req.url === '/api/trades') {
+    const stats = engine.getStats();
     res.writeHead(200, { ...cors(), 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      trades: engine.trades,
+      trades: engine.openTrades,
+      closedTrades: engine.closedTrades,
       capital: engine.capital,
       running: engine.running,
-      priceHistory: engine.priceHistory.slice(-50)
+      priceHistory: engine.priceHistory.slice(-50),
+      stats: stats
     }));
     return;
   }
 
   // Start engine
   if (req.url === '/api/engine/start' && req.method === 'POST') {
-    engine.start();
+    if (!engine.running) {
+      engine.start();
+    }
     res.writeHead(200, { ...cors(), 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'started' }));
+    res.end(JSON.stringify({ status: 'started', running: engine.running }));
     return;
   }
 
@@ -67,7 +72,7 @@ http.createServer((req, res) => {
   if (req.url === '/api/engine/stop' && req.method === 'POST') {
     engine.stop();
     res.writeHead(200, { ...cors(), 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'stopped' }));
+    res.end(JSON.stringify({ status: 'stopped', running: engine.running }));
     return;
   }
 
@@ -99,21 +104,34 @@ http.createServer((req, res) => {
       backdrop-filter: blur(10px);
     }
     .stats { grid-column: 1 / -1; }
-    .stat-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 15px; }
+    .stat-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 15px; }
     .stat-item { background: rgba(255,255,255,0.08); padding: 15px; border-radius: 8px; text-align: center; }
     .stat-label { font-size: 0.9em; opacity: 0.7; margin-bottom: 5px; }
     .stat-value { font-size: 1.8em; font-weight: bold; }
     .positive { color: #10b981; }
     .negative { color: #ef4444; }
     .price { font-size: 2em; font-weight: bold; margin-bottom: 10px; }
-    .signal { display: inline-block; padding: 8px 16px; border-radius: 20px; font-weight: bold; margin: 5px 0; }
-    .signal.bull { background: rgba(16,185,129,0.3); color: #10b981; }
-    .signal.sell { background: rgba(239,68,68,0.3); color: #ef4444; }
-    .signal.hold { background: rgba(156,163,175,0.3); color: #d1d5db; }
-    table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-    th, td { padding: 12px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); }
-    th { background: rgba(255,255,255,0.05); }
-    tr:hover { background: rgba(255,255,255,0.05); }
+    .button-group { display: flex; gap: 10px; margin: 20px 0; }
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 1em;
+      transition: all 0.3s;
+    }
+    .btn-start {
+      background: rgba(16,185,129,0.8);
+      color: #fff;
+    }
+    .btn-start:hover { background: rgba(16,185,129,1); transform: scale(1.05); }
+    .btn-stop {
+      background: rgba(239,68,68,0.8);
+      color: #fff;
+    }
+    .btn-stop:hover { background: rgba(239,68,68,1); transform: scale(1.05); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .status-bar { 
       background: rgba(16,185,129,0.2); 
       border: 1px solid #10b981; 
@@ -126,7 +144,10 @@ http.createServer((req, res) => {
       background: rgba(239,68,68,0.2); 
       border-color: #ef4444; 
     }
-    .info-text { font-size: 0.9em; opacity: 0.8; margin-top: 5px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+    th, td { padding: 12px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); }
+    th { background: rgba(255,255,255,0.05); }
+    tr:hover { background: rgba(255,255,255,0.05); }
   </style>
 </head>
 <body>
@@ -134,188 +155,9 @@ http.createServer((req, res) => {
     <h1>🤖 CryptoSignal AI - Simulateur Temps Réel</h1>
     
     <div class="status-bar" id="status">
-      🟢 Connecté | Bot tourne depuis Railway...
+      🟢 Connecté | En attente de commande...
     </div>
 
-    <div class="grid">
-      <div class="card">
-        <h2>📊 Prix BTC Live</h2>
-        <div class="price" id="price">$60,000</div>
-        <div class="info-text">Mise à jour toutes les 5s</div>
-      </div>
-
-      <div class="card">
-        <h2>💰 Portefeuille</h2>
-        <div class="price" id="capital">$500.00</div>
-        <div class="info-text" id="positionInfo">0 position ouverte</div>
-      </div>
-    </div>
-
-    <div class="card stats">
-      <h2>📈 État du Bot</h2>
-      <div class="stat-grid">
-        <div class="stat-item">
-          <div class="stat-label">Capital</div>
-          <div class="stat-value" id="statCapital">$500</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-label">Positions</div>
-          <div class="stat-value" id="statTrades">0</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-label">Status</div>
-          <div class="stat-value" id="statRunning">✅ OUI</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-label">Dernière maj</div>
-          <div class="stat-value" id="statTime">--:--:--</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-label">Historique</div>
-          <div class="stat-value" id="statHistory">0 prix</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-label">Mode</div>
-          <div class="stat-value">TESTNET</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>📡 Données Brutes du Bot</h2>
-      <pre id="rawData" style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; overflow-x: auto; font-size: 0.85em;">Chargement...</pre>
-    </div>
-  </div>
-
-  <script>
-    const API_URL = window.location.origin;
-    
-    async function fetchBotData() {
-      try {
-        const res = await fetch(API_URL + '/api/trades');
-        const data = await res.json();
-        return data;
-      } catch(e) {
-        console.error('Erreur:', e);
-        return null;
-      }
-    }
-
-    async function update() {
-      const data = await fetchBotData();
-      
-      if (!data) {
-        document.getElementById('status').className = 'status-bar error';
-        document.getElementById('status').textContent = '🔴 Erreur de connexion au bot';
-        document.getElementById('rawData').textContent = 'Impossible de se connecter au serveur';
-        return;
-      }
-
-      // Prix
-      const price = data.priceHistory && data.priceHistory.length > 0 
-        ? data.priceHistory[data.priceHistory.length - 1] 
-        : 0;
-
-      document.getElementById('status').className = 'status-bar';
-      document.getElementById('status').textContent = '🟢 Connecté | Bot tourne depuis Railway';
-      document.getElementById('price').textContent = '$' + price.toFixed(2);
-      document.getElementById('capital').textContent = '$' + data.capital.toFixed(2);
-      
-      const tradeCount = data.trades ? data.trades.length : 0;
-      document.getElementById('positionInfo').textContent = tradeCount + ' position' + (tradeCount !== 1 ? 's' : '') + ' ouverte';
-
-      // Stats
-      document.getElementById('statCapital').textContent = '$' + data.capital.toFixed(2);
-      document.getElementById('statTrades').textContent = tradeCount;
-      document.getElementById('statRunning').textContent = data.running ? '✅ OUI' : '❌ NON';
-      document.getElementById('statTime').textContent = new Date().toLocaleTimeString('fr-FR');
-      document.getElementById('statHistory').textContent = (data.priceHistory ? data.priceHistory.length : 0) + ' prix';
-
-      // Données brutes
-      const historyPreview = data.priceHistory 
-        ? data.priceHistory.slice(-10).map(p => '$' + p.toFixed(2)).join(' → ')
-        : 'Vide';
-
-      document.getElementById('rawData').textContent = JSON.stringify({
-        capital: data.capital,
-        running: data.running,
-        tradesCount: tradeCount,
-        priceHistoryLength: data.priceHistory ? data.priceHistory.length : 0,
-        lastPrices: historyPreview,
-        timestamp: new Date().toISOString()
-      }, null, 2);
-    }
-
-    // Premier update immédiat
-    update();
-    
-    // Puis update toutes les 5s
-    setInterval(update, 5000);
-  </script>
-</body>
-</html>`);
-    return;
-  }
-
-  // Binance proxy
-  if (req.url === '/api/binance') {
-    let body = '';
-    req.on('data', c => body += c);
-    req.on('end', () => {
-      try {
-        const { path: p, method: m = 'GET', params = {} } = JSON.parse(body || '{}');
-        const k = req.headers['x-api-key'];
-        const s = req.headers['x-api-secret'];
-        const mode = req.headers['x-bn-mode'] || 'testnet';
-        if (!k || !s) { 
-          res.writeHead(400, cors()); 
-          res.end(JSON.stringify({error:'Clés manquantes'})); 
-          return; 
-        }
-        const BASE = mode === 'mainnet' ? 'fapi.binance.com' : 'demo-fapi.binance.com';
-        const ts = Date.now();
-        const qBase = Object.entries({...params, timestamp: ts}).map(([a,b]) => a+'='+b).join('&');
-        const sig = hmacSHA256(s, qBase);
-        const query = qBase + '&signature=' + sig;
-        const rPath = (m === 'GET') ? p + '?' + query : p;
-        const pb = (m === 'POST' || m === 'DELETE') ? query : '';
-        const opts = {
-          hostname: BASE, 
-          path: rPath, 
-          method: m,
-          headers: { 
-            'X-MBX-APIKEY': k, 
-            'Content-Type': 'application/x-www-form-urlencoded', 
-            'Content-Length': Buffer.byteLength(pb) 
-          }
-        };
-        const pr = https.request(opts, r2 => {
-          let d = '';
-          r2.on('data', c => d += c);
-          r2.on('end', () => { 
-            res.writeHead(200, {...cors(),'Content-Type':'application/json'}); 
-            res.end(d); 
-          });
-        });
-        pr.on('error', e => { 
-          res.writeHead(500, cors()); 
-          res.end(JSON.stringify({error:e.message})); 
-        });
-        if (pb) pr.write(pb);
-        pr.end();
-      } catch(e) { 
-        res.writeHead(500, cors()); 
-        res.end(JSON.stringify({error:e.message})); 
-      }
-    }); 
-    return;
-  }
-
-  // 404
-  res.writeHead(404, cors()); 
-  res.end('Not found');
-
-}).listen(PORT, () => {
-  console.log('🎯 Itachi v3.1 running on port ' + PORT);
-  engine.start();
-});
+    <div class="button-group">
+      <button class="btn btn-start" id="btnStart" onclick="startBot()">▶️ Lancer le Bot</button>
+      <button class="btn btn-stop" id="btnStop"
