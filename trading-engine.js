@@ -31,8 +31,9 @@ class TradingEngine {
     this.tradeCount = 0;
     this.currentPrice = 0;
     this.tickCounter = 0;
+    this.lastPositionAmt = 0;
 
-    console.log(`⚙️  Bot Binance Testnet | ${this.config.asset} | Capital: $${this.capital} | TP:+${this.config.tp*100}% SL:-${this.config.sl*100}%`);
+    console.log(`⚙️  Bot Binance Testnet | ${this.config.asset} | Capital: $${this.capital}`);
   }
 
   sign(params) {
@@ -77,7 +78,6 @@ class TradingEngine {
       threshold += 250;
     }
     if (this.capital >= 1500 && this.tradeCount > 0 && this.tradeCount % 10 === 0) {
-      console.log(`💥 TRADE SPÉCIAL 3× | Mise: $${(stake * 3).toFixed(2)}`);
       return parseFloat((stake * 3).toFixed(2));
     }
     return parseFloat(stake.toFixed(2));
@@ -88,16 +88,13 @@ class TradingEngine {
       const stake = this.getStake();
       const lev = this.swarm.lastLeverage || 5;
 
-      // 1. Set leverage
       await this.request('POST', '/fapi/v1/leverage', {
         symbol: this.config.asset,
         leverage: lev
       });
 
-      // 2. Quantité
       const qty = parseFloat((stake * lev / price).toFixed(3));
 
-      // 3. Ordre Market LONG
       const order = await this.request('POST', '/fapi/v1/order', {
         symbol: this.config.asset,
         side: 'BUY',
@@ -109,7 +106,6 @@ class TradingEngine {
         const sl = parseFloat((price * (1 - this.config.sl)).toFixed(2));
         const tp = parseFloat((price * (1 + this.config.tp)).toFixed(2));
 
-        // 4. Stop Loss
         await this.request('POST', '/fapi/v1/order', {
           symbol: this.config.asset,
           side: 'SELL',
@@ -118,7 +114,6 @@ class TradingEngine {
           closePosition: 'true'
         });
 
-        // 5. Take Profit
         await this.request('POST', '/fapi/v1/order', {
           symbol: this.config.asset,
           side: 'SELL',
@@ -127,22 +122,24 @@ class TradingEngine {
           closePosition: 'true'
         });
 
-        this.openTrades.push({
+        const trade = {
           id: order.orderId,
           entry: price,
           qty,
           stake,
           sl,
           tp,
-          highPrice: price,
           direction: 'LONG',
           openTime: Date.now(),
           leverage: lev
-        });
+        };
 
+        this.openTrades.push(trade);
         this.lastOpenTime = Date.now();
         this.tradeCount++;
-        console.log(`✅ ORDRE #${this.tradeCount} | ID:${order.orderId} | Entry:$${price} | Qty:${qty} | SL:$${sl} | TP:$${tp}`);
+        this.lastPositionAmt = qty;
+
+        console.log(`✅ ORDRE #${this.tradeCount} | ID:${order.orderId} | Entry:$${price} | SL:$${sl} | TP:$${tp}`);
       } else {
         console.error(`❌ Ordre rejeté: ${JSON.stringify(order)}`);
       }
@@ -156,24 +153,50 @@ class TradingEngine {
       const result = await this.request('GET', '/fapi/v2/positionRisk', {
         symbol: this.config.asset
       });
-      const positions = Array.isArray(result) ? result : [];
-      const active = positions.filter(p => Math.abs(parseFloat(p.positionAmt)) > 0);
 
-      if (active.length === 0 && this.openTrades.length > 0) {
+      const positions = Array.isArray(result) ? result : [];
+      const active = positions.find(p => Math.abs(parseFloat(p.positionAmt)) > 0);
+      const currentAmt = active ? Math.abs(parseFloat(active.positionAmt)) : 0;
+
+      // Position fermée sur Binance mais encore en local
+      if (currentAmt === 0 && this.openTrades.length > 0) {
+        // Récupère PnL réel depuis Binance
+        const income = await this.request('GET', '/fapi/v1/income', {
+          symbol: this.config.asset,
+          incomeType: 'REALIZED_PNL',
+          limit: 1
+        });
+
+        let realPnL = 0;
+        if (Array.isArray(income) && income.length > 0) {
+          realPnL = parseFloat(income[0].income);
+        } else {
+          // Fallback : calcul local
+          const t = this.openTrades[0];
+          realPnL = (this.currentPrice - t.entry) * t.qty;
+        }
+
         this.openTrades.forEach(t => {
-          const pnl = (this.currentPrice - t.entry) * t.qty;
           this.closedTrades.push({
             ...t,
             exit: this.currentPrice,
             closeTime: Date.now(),
-            pnl: parseFloat(pnl.toFixed(4)),
-            status: pnl > 0 ? 'TP' : 'SL'
+            pnl: parseFloat(realPnL.toFixed(4)),
+            status: realPnL > 0 ? 'TP' : 'SL'
           });
-          this.capital += pnl;
-          console.log(`📊 Fermé | PnL:$${pnl.toFixed(2)} | Capital:$${this.capital.toFixed(2)}`);
         });
+
+        this.capital += realPnL;
+        console.log(`📊 Position fermée | PnL réel: $${realPnL.toFixed(2)} | Capital: $${this.capital.toFixed(2)}`);
         this.openTrades = [];
+        this.lastPositionAmt = 0;
       }
+
+      if (active) {
+        const unrealPnL = parseFloat(active.unRealizedProfit || 0);
+        console.log(`🔄 Sync | Pos: ${currentAmt} BTC | PnL non réalisé: $${unrealPnL.toFixed(2)}`);
+      }
+
     } catch(e) {
       console.error(`❌ syncPositions: ${e.message}`);
     }
@@ -196,7 +219,6 @@ class TradingEngine {
       });
       return parseFloat(data.price);
     } catch(e) {
-      console.error(`❌ Prix: ${e.message}`);
       return 0;
     }
   }
@@ -210,10 +232,8 @@ class TradingEngine {
     this.priceHistory.push(price);
     if (this.priceHistory.length > 300) this.priceHistory.shift();
 
-    // Sync Binance toutes les 3 ticks
-    if (this.tickCounter % 3 === 0) {
-      await this.syncPositions();
-    }
+    // Sync TOUJOURS (pas seulement tous les X ticks)
+    await this.syncPositions();
 
     if (this.priceHistory.length >= 30) {
       try {
@@ -226,9 +246,8 @@ class TradingEngine {
         const timeSinceLast = now - this.lastOpenTime;
         const stake = this.getStake();
 
-        console.log(`💹 $${price.toFixed(2)} | Q:${Math.floor(sig.q)} | ${sig.action} | Mise:$${stake} | Pos:${this.openTrades.length} | Capital:$${this.capital.toFixed(2)}`);
+        console.log(`💹 $${price.toFixed(2)} | Q:${Math.floor(sig.q)} | ${sig.action} | Pos:${this.openTrades.length} | Capital:$${this.capital.toFixed(2)}`);
 
-        // Ouvre si signal + pas de position + délai 6s
         if (
           sig.action === 'BUY' &&
           sig.q >= 30 &&
@@ -250,7 +269,7 @@ class TradingEngine {
   async start() {
     if (this.running) return;
     this.running = true;
-    console.log(`🚀 BOT DÉMARRÉ | ${this.config.asset} | TP:+${this.config.tp*100}% | SL:-${this.config.sl*100}% | Gap:${this.config.minGapMs}ms`);
+    console.log(`🚀 BOT DÉMARRÉ | ${this.config.asset} | TP:+${this.config.tp*100}% | SL:-${this.config.sl*100}%`);
 
     while (this.running) {
       try {
