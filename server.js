@@ -37,13 +37,12 @@ http.createServer((req, res) => {
 
   if (req.url === '/health') {
     res.writeHead(200, { ...cors(), 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', name: 'Itachi Multi-Asset v4.0' }));
+    res.end(JSON.stringify({ status: 'ok', name: 'Itachi Multi-Asset MTF v5.0' }));
     return;
   }
 
   if (req.url === '/api/trades') {
     const stats = engine.getStats();
-    // Fix multi-asset : priceHistory depuis le premier bot BTC
     const btcBot = engine.bots && engine.bots[0];
     const priceHistory = btcBot && btcBot.priceHistory
       ? btcBot.priceHistory.slice(-50)
@@ -82,7 +81,7 @@ http.createServer((req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CryptoSignal AI - Multi-Asset Bot</title>
+  <title>CryptoSignal AI - Multi-Asset MTF Bot</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -99,6 +98,7 @@ http.createServer((req, res) => {
     .stat-value { font-size: 1.5em; font-weight: bold; }
     .positive { color: #10b981; }
     .negative { color: #ef4444; }
+    .neutral { color: #fbbf24; }
     .price { font-size: 2em; font-weight: bold; margin-bottom: 10px; }
     .button-group { display: flex; gap: 10px; margin: 20px 0; }
     .btn { padding: 14px 28px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 1em; transition: all 0.3s; }
@@ -111,19 +111,30 @@ http.createServer((req, res) => {
     .status-bar.error { background: rgba(239,68,68,0.2); border-color: #ef4444; }
     .status-bar.stopped { background: rgba(156,163,175,0.2); border-color: #9ca3af; }
     table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.9em; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.85em; }
     th { background: rgba(255,255,255,0.05); font-weight: 600; }
     tr:hover { background: rgba(255,255,255,0.03); }
     .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 0.8em; font-weight: bold; }
     .badge-tp { background: rgba(16,185,129,0.3); color: #10b981; }
     .badge-sl { background: rgba(239,68,68,0.3); color: #ef4444; }
-    .badge-symbol { background: rgba(99,102,241,0.3); color: #818cf8; margin-right: 5px; }
+    .badge-timeout-p { background: rgba(16,185,129,0.2); color: #6ee7b7; }
+    .badge-timeout-n { background: rgba(239,68,68,0.2); color: #fca5a5; }
+    .badge-symbol { background: rgba(99,102,241,0.3); color: #818cf8; margin-right: 4px; font-size: 0.75em; }
     .mode-badge { background: rgba(251,191,36,0.3); color: #fbbf24; padding: 4px 10px; border-radius: 4px; font-size: 0.8em; margin-left: 10px; }
+    .mtf-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-top: 15px; }
+    .mtf-card { background: rgba(255,255,255,0.05); border-radius: 8px; padding: 12px; }
+    .mtf-title { font-size: 0.85em; font-weight: bold; margin-bottom: 8px; }
+    .mtf-row { display: flex; justify-content: space-between; font-size: 0.75em; margin: 3px 0; }
+    .bull { color: #10b981; }
+    .bear { color: #ef4444; }
+    .neutral-text { color: #fbbf24; }
+    .score-bar { height: 6px; border-radius: 3px; margin-top: 6px; background: rgba(255,255,255,0.1); }
+    .score-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>🤖 CryptoSignal AI <span class="mode-badge">MULTI-ASSET TESTNET</span></h1>
+    <h1>🤖 CryptoSignal AI <span class="mode-badge">MULTI-ASSET MTF v5.0</span></h1>
 
     <div class="status-bar" id="status">🟡 En attente...</div>
 
@@ -143,7 +154,7 @@ http.createServer((req, res) => {
       <div class="card">
         <h2>📊 BTC Live</h2>
         <div class="price" id="price">$--</div>
-        <div style="opacity:0.7; font-size:0.9em;">5 assets surveillés : BTC ETH SOL BNB XRP</div>
+        <div style="opacity:0.7; font-size:0.9em;">5 assets : BTC ETH SOL BNB XRP</div>
       </div>
       <div class="card">
         <h2>💰 Portefeuille</h2>
@@ -163,7 +174,7 @@ http.createServer((req, res) => {
           <div class="stat-value" id="openCount">0</div>
         </div>
         <div class="stat-item">
-          <div class="stat-label">Trades Effectués</div>
+          <div class="stat-label">Effectués</div>
           <div class="stat-value" id="totalCount">0</div>
         </div>
         <div class="stat-item">
@@ -188,8 +199,16 @@ http.createServer((req, res) => {
         </div>
         <div class="stat-item">
           <div class="stat-label">Maj</div>
-          <div class="stat-value" id="statTime" style="font-size:1em;">--:--</div>
+          <div class="stat-value" id="statTime" style="font-size:0.9em;">--:--</div>
         </div>
+      </div>
+    </div>
+
+    <!-- MTF Dashboard -->
+    <div class="card card-full">
+      <h2>🌍 Analyse Multi-Timeframe</h2>
+      <div class="mtf-grid" id="mtfGrid">
+        <!-- Généré dynamiquement -->
       </div>
     </div>
 
@@ -197,10 +216,10 @@ http.createServer((req, res) => {
       <h2>🎯 Positions Ouvertes</h2>
       <table>
         <thead>
-          <tr><th>Symbol</th><th>Entry</th><th>Actuel</th><th>SL</th><th>TP</th><th>Mise</th><th>P&L</th><th>P&L %</th></tr>
+          <tr><th>Symbol</th><th>Entry</th><th>Actuel</th><th>SL</th><th>TP</th><th>Mise</th><th>MTF</th><th>P&L</th><th>P&L %</th></tr>
         </thead>
         <tbody id="openBody">
-          <tr><td colspan="8" style="text-align:center;opacity:0.5;">Aucune position</td></tr>
+          <tr><td colspan="9" style="text-align:center;opacity:0.5;">Aucune position</td></tr>
         </tbody>
       </table>
     </div>
@@ -222,7 +241,6 @@ http.createServer((req, res) => {
     const API = window.location.origin;
     let lastPrice = 0;
     let chart = null;
-    let lastPrices = {};
 
     function initChart() {
       const ctx = document.getElementById('priceChart').getContext('2d');
@@ -263,7 +281,7 @@ http.createServer((req, res) => {
           document.getElementById('btnStart').disabled = true;
           document.getElementById('btnStop').disabled = false;
           document.getElementById('status').className = 'status-bar';
-          document.getElementById('status').textContent = '🟢 Multi-Bot EN COURS — 5 assets Testnet RÉEL';
+          document.getElementById('status').textContent = '🟢 Multi-Bot MTF EN COURS — 5 assets Testnet RÉEL';
         }
       } catch(e) { console.error(e); }
     }
@@ -279,6 +297,52 @@ http.createServer((req, res) => {
           document.getElementById('status').textContent = '🔴 Bot ARRÊTÉ';
         }
       } catch(e) { console.error(e); }
+    }
+
+    function trendColor(t) {
+      if (t === 'BULL') return 'bull';
+      if (t === 'BEAR') return 'bear';
+      return 'neutral-text';
+    }
+
+    function trendIcon(t) {
+      if (t === 'BULL') return '▲';
+      if (t === 'BEAR') return '▼';
+      return '●';
+    }
+
+    function renderMTF(mtfScores) {
+      if (!mtfScores) return;
+      const grid = document.getElementById('mtfGrid');
+      const symbols = Object.keys(mtfScores);
+      grid.innerHTML = symbols.map(sym => {
+        const m = mtfScores[sym];
+        const score = m.score || 0;
+        const bias = m.bias || 'NEUTRAL';
+        const t = m.trends || {};
+        const color = bias === 'BULL' ? '#10b981' : bias === 'BEAR' ? '#ef4444' : '#fbbf24';
+        const scorePct = Math.min(100, Math.max(0, score));
+        return \`
+          <div class="mtf-card">
+            <div class="mtf-title">
+              <span class="badge badge-symbol">\${sym.replace('USDT','')}</span>
+              <span class="\${trendColor(bias)}">\${trendIcon(bias)} \${score.toFixed(0)}/100</span>
+            </div>
+            <div class="score-bar">
+              <div class="score-fill" style="width:\${scorePct}%;background:\${color}"></div>
+            </div>
+            <div style="margin-top:8px;">
+              <div class="mtf-row"><span style="opacity:0.6">21d</span><span class="\${trendColor(t.trend_21d)}">\${trendIcon(t.trend_21d)} \${t.trend_21d||'--'}</span></div>
+              <div class="mtf-row"><span style="opacity:0.6">7d</span><span class="\${trendColor(t.trend_7d)}">\${trendIcon(t.trend_7d)} \${t.trend_7d||'--'}</span></div>
+              <div class="mtf-row"><span style="opacity:0.6">24h</span><span class="\${trendColor(t.trend_24h)}">\${trendIcon(t.trend_24h)} \${t.trend_24h||'--'}</span></div>
+              <div class="mtf-row"><span style="opacity:0.6">4h</span><span class="\${trendColor(t.trend_4h)}">\${trendIcon(t.trend_4h)} \${t.trend_4h||'--'}</span></div>
+              <div class="mtf-row"><span style="opacity:0.6">15m</span><span class="\${trendColor(t.trend_15m)}">\${trendIcon(t.trend_15m)} \${t.trend_15m||'--'}</span></div>
+              <div class="mtf-row"><span style="opacity:0.6">3m</span><span class="\${trendColor(t.trend_3m)}">\${trendIcon(t.trend_3m)} \${t.trend_3m||'--'}</span></div>
+              <div class="mtf-row"><span style="opacity:0.6">1m</span><span class="\${trendColor(t.trend_1m)}">\${trendIcon(t.trend_1m)} \${t.trend_1m||'--'}</span></div>
+            </div>
+          </div>
+        \`;
+      }).join('');
     }
 
     async function update() {
@@ -311,36 +375,43 @@ http.createServer((req, res) => {
           document.getElementById('winCount').textContent = data.stats.winTrades || 0;
           document.getElementById('lossCount').textContent = data.stats.lossTrades || 0;
           document.getElementById('winRate').textContent = data.stats.closedTrades > 0 ? data.stats.winRate + '%' : '--%';
+          const wr = data.stats.winRate || 0;
+          document.getElementById('winRate').className = 'stat-value ' + (wr >= 60 ? 'positive' : wr >= 45 ? 'neutral' : 'negative');
           document.getElementById('statPnL').textContent = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
           document.getElementById('statPnL').className = pnl >= 0 ? 'stat-value positive' : 'stat-value negative';
           document.getElementById('statStatus').textContent = data.stats.running ? '🟢 ON' : '⏹️ OFF';
+
+          // MTF Dashboard
+          if (data.stats.mtfScores) {
+            renderMTF(data.stats.mtfScores);
+          }
         }
+
         document.getElementById('statTime').textContent = new Date().toLocaleTimeString('fr-FR');
 
-        // Sync boutons
         if (data.running) {
           document.getElementById('btnStart').disabled = true;
           document.getElementById('btnStop').disabled = false;
           document.getElementById('status').className = 'status-bar';
-          document.getElementById('status').textContent = '🟢 Multi-Bot EN COURS — 5 assets Testnet RÉEL';
+          document.getElementById('status').textContent = '🟢 Multi-Bot MTF EN COURS — 5 assets Testnet RÉEL';
         }
 
         // Positions ouvertes
         const openBody = document.getElementById('openBody');
         if (!data.trades || data.trades.length === 0) {
-          openBody.innerHTML = '<tr><td colspan="8" style="text-align:center;opacity:0.5;">Aucune position ouverte</td></tr>';
+          openBody.innerHTML = '<tr><td colspan="9" style="text-align:center;opacity:0.5;">Aucune position ouverte</td></tr>';
         } else {
           openBody.innerHTML = data.trades.map(t => {
-            const currentP = t.symbol === 'BTCUSDT' ? lastPrice : (lastPrices[t.symbol] || t.entry);
-            const pnl = (currentP - t.entry) * t.qty;
-            const pnlPct = ((currentP - t.entry) / t.entry * 100).toFixed(2);
+            const pnl = (lastPrice - t.entry) * t.qty;
+            const pnlPct = ((lastPrice - t.entry) / t.entry * 100).toFixed(2);
             return '<tr>' +
-              '<td><span class="badge badge-symbol">' + (t.symbol || 'BTC') + '</span></td>' +
+              '<td><span class="badge badge-symbol">' + (t.symbol||'BTC').replace('USDT','') + '</span></td>' +
               '<td>$' + t.entry.toFixed(2) + '</td>' +
-              '<td>$' + currentP.toFixed(2) + '</td>' +
+              '<td>$' + lastPrice.toFixed(2) + '</td>' +
               '<td>$' + t.sl.toFixed(2) + '</td>' +
               '<td>$' + t.tp.toFixed(2) + '</td>' +
               '<td>$' + t.stake + '</td>' +
+              '<td>' + (t.mtfScore ? t.mtfScore.toFixed(0) : '--') + '</td>' +
               '<td class="' + (pnl >= 0 ? 'positive' : 'negative') + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) + '</td>' +
               '<td class="' + (pnl >= 0 ? 'positive' : 'negative') + '">' + (pnl >= 0 ? '+' : '') + pnlPct + '%</td>' +
               '</tr>';
@@ -354,13 +425,14 @@ http.createServer((req, res) => {
         } else {
           histBody.innerHTML = data.closedTrades.slice(-15).reverse().map(t => {
             const pnlPct = ((t.exit - t.entry) / t.entry * 100).toFixed(2);
+            const badgeClass = t.status === 'TP' ? 'badge-tp' : t.status === 'TIMEOUT+' ? 'badge-timeout-p' : t.status === 'TIMEOUT-' ? 'badge-timeout-n' : 'badge-sl';
             return '<tr>' +
               '<td>' + new Date(t.closeTime).toLocaleTimeString('fr-FR') + '</td>' +
-              '<td><span class="badge badge-symbol">' + (t.symbol || 'BTC') + '</span></td>' +
+              '<td><span class="badge badge-symbol">' + (t.symbol||'BTC').replace('USDT','') + '</span></td>' +
               '<td>$' + t.entry.toFixed(2) + '</td>' +
               '<td>$' + t.exit.toFixed(2) + '</td>' +
               '<td>$' + t.stake + '</td>' +
-              '<td><span class="badge ' + (t.status === 'TP' ? 'badge-tp' : 'badge-sl') + '">' + t.status + '</span></td>' +
+              '<td><span class="badge ' + badgeClass + '">' + t.status + '</span></td>' +
               '<td class="' + (t.pnl >= 0 ? 'positive' : 'negative') + '">' + (t.pnl >= 0 ? '+' : '') + '$' + t.pnl.toFixed(2) + '</td>' +
               '<td class="' + (t.pnl >= 0 ? 'positive' : 'negative') + '">' + (t.pnl >= 0 ? '+' : '') + pnlPct + '%</td>' +
               '</tr>';
@@ -428,6 +500,6 @@ http.createServer((req, res) => {
   res.end('Not found');
 
 }).listen(PORT, () => {
-  console.log('🎯 Itachi Multi-Asset v4.0 running on port ' + PORT);
+  console.log('🎯 Itachi Multi-Asset MTF v5.0 running on port ' + PORT);
   engine.start();
 });
