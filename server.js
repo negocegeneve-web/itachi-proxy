@@ -160,4 +160,252 @@ http.createServer((req, res) => {
 
     <div class="button-group">
       <button class="btn btn-start" id="btnStart" onclick="startBot()">▶️ Lancer le Bot</button>
-      <button class="btn btn-stop" id="btnStop"
+      <button class="btn btn-stop" id="btnStop" onclick="stopBot()" disabled>⏹️ Arrêter le Bot</button>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>📊 Prix BTC Live</h2>
+        <div class="price" id="price">$60,000</div>
+        <div style="margin-top: 10px; font-size: 0.9em; opacity: 0.7;">
+          Mise à jour toutes les 5s
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>💰 Portefeuille</h2>
+        <div class="price" id="capital">$500.00</div>
+        <div style="margin-top: 10px; font-size: 0.9em;">
+          P&L: <span id="totalPnL" class="positive">+$0.00</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card stats">
+      <h2>📈 Statistiques</h2>
+      <div class="stat-grid">
+        <div class="stat-item">
+          <div class="stat-label">Trades Ouverts</div>
+          <div class="stat-value" id="openCount">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Trades Effectués</div>
+          <div class="stat-value" id="totalCount">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Trades Gagnés ✅</div>
+          <div class="stat-value positive" id="winCount">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Trades Perdus ❌</div>
+          <div class="stat-value negative" id="lossCount">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Win Rate</div>
+          <div class="stat-value" id="winRate">--</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Total PnL</div>
+          <div class="stat-value positive" id="statPnL">+$0.00</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Status</div>
+          <div class="stat-value" id="statStatus">⏹️ ARRÊTÉ</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Maj</div>
+          <div class="stat-value" id="statTime">--:--:--</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>🎯 Positions Ouvertes</h2>
+      <table id="openTable">
+        <thead>
+          <tr><th>ID</th><th>Entry</th><th>Actuel</th><th>SL</th><th>TP</th><th>P&L</th><th>P&L %</th></tr>
+        </thead>
+        <tbody id="openBody">
+          <tr><td colspan="7" style="text-align: center; opacity: 0.5;">Aucune position ouverte</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>📝 Historique des Trades</h2>
+      <table id="historyTable">
+        <thead>
+          <tr><th>Temps</th><th>Entry</th><th>Exit</th><th>Type</th><th>P&L</th><th>P&L %</th></tr>
+        </thead>
+        <tbody id="historyBody">
+          <tr><td colspan="6" style="text-align: center; opacity: 0.5;">Aucun trade fermé</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const API_URL = window.location.origin;
+    let lastPrice = 0;
+
+    async function fetchBotData() {
+      try {
+        const res = await fetch(API_URL + '/api/trades');
+        const data = await res.json();
+        return data;
+      } catch(e) {
+        console.error('Erreur:', e);
+        return null;
+      }
+    }
+
+    async function startBot() {
+      try {
+        const res = await fetch(API_URL + '/api/engine/start', { method: 'POST' });
+        const data = await res.json();
+        if (data.running) {
+          document.getElementById('btnStart').disabled = true;
+          document.getElementById('btnStop').disabled = false;
+          document.getElementById('status').textContent = '🟢 Bot EN COURS D\\'EXÉCUTION';
+        }
+      } catch(e) {
+        console.error('Erreur start:', e);
+      }
+    }
+
+    async function stopBot() {
+      try {
+        const res = await fetch(API_URL + '/api/engine/stop', { method: 'POST' });
+        const data = await res.json();
+        if (!data.running) {
+          document.getElementById('btnStart').disabled = false;
+          document.getElementById('btnStop').disabled = true;
+          document.getElementById('status').textContent = '🔴 Bot ARRÊTÉ';
+        }
+      } catch(e) {
+        console.error('Erreur stop:', e);
+      }
+    }
+
+    async function update() {
+      const data = await fetchBotData();
+      
+      if (!data) {
+        document.getElementById('status').className = 'status-bar error';
+        document.getElementById('status').textContent = '🔴 Erreur connexion';
+        return;
+      }
+
+      // Prix
+      lastPrice = data.priceHistory && data.priceHistory.length > 0 
+        ? data.priceHistory[data.priceHistory.length - 1] 
+        : 0;
+
+      document.getElementById('price').textContent = '$' + lastPrice.toFixed(2);
+      document.getElementById('capital').textContent = '$' + data.capital.toFixed(2);
+      document.getElementById('totalPnL').textContent = (data.stats.totalPnL >= 0 ? '+' : '') + '$' + data.stats.totalPnL.toFixed(2);
+
+      // Stats
+      document.getElementById('openCount').textContent = data.stats.openTrades;
+      document.getElementById('totalCount').textContent = data.stats.closedTrades;
+      document.getElementById('winCount').textContent = data.stats.winTrades;
+      document.getElementById('lossCount').textContent = data.stats.lossTrades;
+      document.getElementById('winRate').textContent = data.stats.totalPnL > 0 ? data.stats.winRate + '%' : '--';
+      document.getElementById('statPnL').textContent = (data.stats.totalPnL >= 0 ? '+' : '') + '$' + data.stats.totalPnL.toFixed(2);
+      document.getElementById('statStatus').textContent = data.stats.running ? '🟢 RUNNING' : '⏹️ STOPPED';
+      document.getElementById('statTime').textContent = new Date().toLocaleTimeString('fr-FR');
+
+      // Positions ouvertes
+      const openBody = document.getElementById('openBody');
+      if (data.trades.length === 0) {
+        openBody.innerHTML = '<tr><td colspan="7" style="text-align: center; opacity: 0.5;">Aucune position ouverte</td></tr>';
+      } else {
+        openBody.innerHTML = data.trades.map(t => {
+          const pnl = (lastPrice - t.entry) * t.qty;
+          const pnlPct = (pnl / (t.entry * t.qty) * 100).toFixed(2);
+          return '<tr><td>#' + t.id.toString().slice(-4) + '</td><td>$' + t.entry.toFixed(2) + '</td><td>$' + lastPrice.toFixed(2) + '</td><td>$' + t.sl.toFixed(2) + '</td><td>$' + t.tp.toFixed(2) + '</td><td class="' + (pnl >= 0 ? 'positive' : 'negative') + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) + '</td><td class="' + (pnl >= 0 ? 'positive' : 'negative') + '">' + (pnl >= 0 ? '+' : '') + pnlPct + '%</td></tr>';
+        }).join('');
+      }
+
+      // Historique
+      const histBody = document.getElementById('historyBody');
+      if (data.closedTrades.length === 0) {
+        histBody.innerHTML = '<tr><td colspan="6" style="text-align: center; opacity: 0.5;">Aucun trade fermé</td></tr>';
+      } else {
+        histBody.innerHTML = data.closedTrades.slice(-10).reverse().map(t => {
+          const pnlPct = (t.pnl / (t.entry * t.qty) * 100).toFixed(2);
+          return '<tr><td>' + new Date(t.closeTime).toLocaleTimeString('fr-FR') + '</td><td>$' + t.entry.toFixed(2) + '</td><td>$' + t.exit.toFixed(2) + '</td><td>' + t.status + '</td><td class="' + (t.pnl >= 0 ? 'positive' : 'negative') + '">' + (t.pnl >= 0 ? '+' : '') + '$' + t.pnl.toFixed(2) + '</td><td class="' + (t.pnl >= 0 ? 'positive' : 'negative') + '">' + (t.pnl >= 0 ? '+' : '') + pnlPct + '%</td></tr>';
+        }).join('');
+      }
+    }
+
+    update();
+    setInterval(update, 5000);
+  </script>
+</body>
+</html>`);
+    return;
+  }
+
+  // Binance proxy
+  if (req.url === '/api/binance') {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => {
+      try {
+        const { path: p, method: m = 'GET', params = {} } = JSON.parse(body || '{}');
+        const k = req.headers['x-api-key'];
+        const s = req.headers['x-api-secret'];
+        const mode = req.headers['x-bn-mode'] || 'testnet';
+        if (!k || !s) { 
+          res.writeHead(400, cors()); 
+          res.end(JSON.stringify({error:'Clés manquantes'})); 
+          return; 
+        }
+        const BASE = mode === 'mainnet' ? 'fapi.binance.com' : 'demo-fapi.binance.com';
+        const ts = Date.now();
+        const qBase = Object.entries({...params, timestamp: ts}).map(([a,b]) => a+'='+b).join('&');
+        const sig = hmacSHA256(s, qBase);
+        const query = qBase + '&signature=' + sig;
+        const rPath = (m === 'GET') ? p + '?' + query : p;
+        const pb = (m === 'POST' || m === 'DELETE') ? query : '';
+        const opts = {
+          hostname: BASE, 
+          path: rPath, 
+          method: m,
+          headers: { 
+            'X-MBX-APIKEY': k, 
+            'Content-Type': 'application/x-www-form-urlencoded', 
+            'Content-Length': Buffer.byteLength(pb) 
+          }
+        };
+        const pr = https.request(opts, r2 => {
+          let d = '';
+          r2.on('data', c => d += c);
+          r2.on('end', () => { 
+            res.writeHead(200, {...cors(),'Content-Type':'application/json'}); 
+            res.end(d); 
+          });
+        });
+        pr.on('error', e => { 
+          res.writeHead(500, cors()); 
+          res.end(JSON.stringify({error:e.message})); 
+        });
+        if (pb) pr.write(pb);
+        pr.end();
+      } catch(e) { 
+        res.writeHead(500, cors()); 
+        res.end(JSON.stringify({error:e.message})); 
+      }
+    }); 
+    return;
+  }
+
+  // 404
+  res.writeHead(404, cors()); 
+  res.end('Not found');
+
+}).listen(PORT, () => {
+  console.log('🎯 Itachi v3.1 running on port ' + PORT);
+  // Ne pas lancer automatiquement - attendre le bouton START
+});
