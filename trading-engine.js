@@ -59,8 +59,10 @@ class TradingEngine {
       try {
         const sig = this.swarm.coordinate(this.priceHistory, { capital: this.capital, trades: this.openTrades });
         
-        // Simulation: Ouvre trade si signal fort (Q >= 55)
-        if (sig.action === 'BUY' && sig.q >= 55 && this.openTrades.length === 0) {
+        console.log(`💹 ${this.config.asset}: $${price.toFixed(2)} | Signal: ${sig.action} | Q:${Math.floor(sig.q)} | EMA Fast:${sig.emaFast.toFixed(2)} Slow:${sig.emaSlow.toFixed(2)}`);
+
+        // Simulation: Ouvre trade si signal fort (Q >= 35)
+        if (sig.action === 'BUY' && sig.q >= 35 && this.openTrades.length === 0) {
           const stake = Math.round(this.capital * 0.08);
           const qty = stake / price;
           const trade = {
@@ -75,7 +77,7 @@ class TradingEngine {
             quality: sig.q
           };
           this.openTrades.push(trade);
-          console.log(`🎯 TRADE OPENED | Entry: $${price} | Q:${sig.q}`);
+          console.log(`🎯 TRADE OPENED | Entry: $${price.toFixed(2)} | Q:${Math.floor(sig.q)}`);
         }
 
         // Gère les trades ouverts (SL/TP)
@@ -99,12 +101,11 @@ class TradingEngine {
           return true;
         });
 
-        console.log(`💹 ${this.config.asset}: $${price} | Signal: ${sig.action} | Q:${sig.q} | Lev:${sig.leverage}`);
       } catch(e) {
         console.error(`⚠️  Swarm error: ${e.message}`);
       }
     } else {
-      console.log(`⏳ Init... (${this.priceHistory.length}/30 prix) | ${this.config.asset}: $${price}`);
+      console.log(`⏳ Init... (${this.priceHistory.length}/30 prix) | ${this.config.asset}: $${price.toFixed(2)}`);
     }
   }
 
