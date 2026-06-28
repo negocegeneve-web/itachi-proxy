@@ -6,12 +6,18 @@ const MultiTimeframeAnalyzer = require('./multi-timeframe');
 const BASE_URL = 'testnet.binancefuture.com';
 const TAKER_FEE = 0.0004;
 
+// ✅ 10 assets pour 10 trades simultanés
 const SYMBOLS = [
-  { symbol: 'BTCUSDT', precision: 3, minQty: 0.001 },
-  { symbol: 'ETHUSDT', precision: 3, minQty: 0.001 },
-  { symbol: 'SOLUSDT', precision: 1, minQty: 0.1   },
-  { symbol: 'BNBUSDT', precision: 2, minQty: 0.01  },
-  { symbol: 'XRPUSDT', precision: 0, minQty: 1     }
+  { symbol: 'BTCUSDT',  precision: 3, minQty: 0.001 },
+  { symbol: 'ETHUSDT',  precision: 3, minQty: 0.001 },
+  { symbol: 'SOLUSDT',  precision: 1, minQty: 0.1   },
+  { symbol: 'BNBUSDT',  precision: 2, minQty: 0.01  },
+  { symbol: 'XRPUSDT',  precision: 0, minQty: 1     },
+  { symbol: 'DOGEUSDT', precision: 0, minQty: 1     },
+  { symbol: 'ADAUSDT',  precision: 0, minQty: 1     },
+  { symbol: 'DOTUSDT',  precision: 1, minQty: 0.1   },
+  { symbol: 'LINKUSDT', precision: 1, minQty: 0.1   },
+  { symbol: 'LTCUSDT',  precision: 3, minQty: 0.001 }
 ];
 
 class SymbolBot {
@@ -28,7 +34,9 @@ class SymbolBot {
     this.lastOpenTime = 0;
     this.lastMTFTime = 0;
     this.MTF_REFRESH_MS = 60000;
-    this.TRADE_TIMEOUT_MS = 180000;
+    this.TRADE_TIMEOUT_MS = 120000; // ✅ 2min timeout
+    this.PROFIT_LOCK_PCT = 0.003;   // ✅ Lock profit à +0.3%
+    this.PROFIT_TRAIL_PCT = 0.001;  // ✅ Trailing -0.1% après lock
     console.log(`⚙️  SymbolBot | ${this.symbol}`);
   }
 
@@ -61,7 +69,7 @@ class SymbolBot {
       const fees = this.calcFees(this.openTrade.entry, price, this.openTrade.qty);
       const netPnL = grossPnL - fees;
 
-      console.log(`⏱️  ${this.symbol} FORCE CLOSE ${this.openTrade.direction} | ${reason} | Net:${netPnL >= 0 ? '+' : ''}$${netPnL.toFixed(2)}`);
+      console.log(`⏱️  ${this.symbol} CLOSE | ${reason} | Net:${netPnL >= 0 ? '+' : ''}$${netPnL.toFixed(2)}`);
 
       await this.engine.request('DELETE', '/fapi/v1/allOpenOrders', { symbol: this.symbol });
       await this.engine.request('POST', '/fapi/v1/order', {
@@ -103,39 +111,63 @@ class SymbolBot {
         ? (price - this.openTrade.entry) * this.openTrade.qty
         : (this.openTrade.entry - price) * this.openTrade.qty;
       const grossPnLPct = grossPnL / (this.openTrade.entry * this.openTrade.qty) * 100;
+      const estFees = this.calcFees(this.openTrade.entry, price, this.openTrade.qty);
+      const estNet = grossPnL - estFees;
 
-      // Trailing SL LONG
-      if (isLong && grossPnLPct > 1.0 && price > (this.openTrade.highPrice || this.openTrade.entry)) {
-        this.openTrade.highPrice = price;
-        const newSL = parseFloat((price * 0.99).toFixed(2));
-        if (newSL > this.openTrade.sl) {
-          this.openTrade.sl = newSL;
-          console.log(`📈 ${this.symbol} LONG TRAILING SL → $${newSL.toFixed(2)}`);
+      // ✅ PROFIT LOCK : dès +0.3% → trailing -0.1%
+      if (isLong) {
+        const pricePct = (price - this.openTrade.entry) / this.openTrade.entry;
+        if (pricePct >= this.PROFIT_LOCK_PCT) {
+          // Lock atteint → trailing SL serré
+          const newSL = parseFloat((price * (1 - this.PROFIT_TRAIL_PCT)).toFixed(2));
+          if (newSL > this.openTrade.sl) {
+            this.openTrade.sl = newSL;
+            this.openTrade.profitLocked = true;
+            console.log(`🔒 ${this.symbol} PROFIT LOCK +${(pricePct*100).toFixed(2)}% | SL serré → $${newSL.toFixed(2)}`);
+          }
+        }
+        // Trailing SL large si > +1%
+        if (grossPnLPct > 1.0 && price > (this.openTrade.highPrice || this.openTrade.entry)) {
+          this.openTrade.highPrice = price;
+          const newSL = parseFloat((price * 0.99).toFixed(2));
+          if (newSL > this.openTrade.sl) {
+            this.openTrade.sl = newSL;
+            console.log(`📈 ${this.symbol} TRAILING SL → $${newSL.toFixed(2)}`);
+          }
         }
       }
 
-      // Trailing SL SHORT
-      if (!isLong && grossPnLPct > 1.0 && price < (this.openTrade.lowPrice || this.openTrade.entry)) {
-        this.openTrade.lowPrice = price;
-        const newSL = parseFloat((price * 1.01).toFixed(2));
-        if (newSL < this.openTrade.sl) {
-          this.openTrade.sl = newSL;
-          console.log(`📉 ${this.symbol} SHORT TRAILING SL → $${newSL.toFixed(2)}`);
+      if (!isLong) {
+        const pricePct = (this.openTrade.entry - price) / this.openTrade.entry;
+        if (pricePct >= this.PROFIT_LOCK_PCT) {
+          const newSL = parseFloat((price * (1 + this.PROFIT_TRAIL_PCT)).toFixed(2));
+          if (newSL < this.openTrade.sl) {
+            this.openTrade.sl = newSL;
+            this.openTrade.profitLocked = true;
+            console.log(`🔒 ${this.symbol} SHORT PROFIT LOCK +${(pricePct*100).toFixed(2)}% | SL → $${newSL.toFixed(2)}`);
+          }
+        }
+        if (grossPnLPct > 1.0 && price < (this.openTrade.lowPrice || this.openTrade.entry)) {
+          this.openTrade.lowPrice = price;
+          const newSL = parseFloat((price * 1.01).toFixed(2));
+          if (newSL < this.openTrade.sl) {
+            this.openTrade.sl = newSL;
+            console.log(`📉 ${this.symbol} SHORT TRAILING SL → $${newSL.toFixed(2)}`);
+          }
         }
       }
 
-      // Timeout seulement en bénéfice net
+      // ✅ Timeout 2min → ferme si profit net > 0
       if (tradeAge >= this.TRADE_TIMEOUT_MS) {
-        const estFees = this.calcFees(this.openTrade.entry, price, this.openTrade.qty);
-        const estNet = grossPnL - estFees;
         if (estNet > 0) {
-          await this.forceClose(price, `3min + profit net +$${estNet.toFixed(2)}`);
+          await this.forceClose(price, `2min + profit net +$${estNet.toFixed(2)}`);
         } else {
-          console.log(`⏳ ${this.symbol} 3min en perte ($${estNet.toFixed(2)}) | Attend SL/TP`);
+          console.log(`⏳ ${this.symbol} 2min en perte ($${estNet.toFixed(2)}) | Attend SL/TP`);
         }
         return;
       }
 
+      // Check Binance
       const result = await this.engine.request('GET', '/fapi/v2/positionRisk', { symbol: this.symbol });
       const positions = Array.isArray(result) ? result : [];
       const active = positions.find(p => Math.abs(parseFloat(p.positionAmt)) > 0);
@@ -170,9 +202,8 @@ class SymbolBot {
       } else if (active) {
         const unrealPnL = parseFloat(active.unRealizedProfit || 0);
         const remaining = Math.max(0, this.TRADE_TIMEOUT_MS - tradeAge);
-        const estFees = this.calcFees(this.openTrade.entry, price, this.openTrade.qty);
-        const estNet = unrealPnL - estFees;
-        console.log(`🔄 ${this.symbol} ${isLong ? '📈LONG' : '📉SHORT'} | Gross:${unrealPnL >= 0 ? '+' : ''}$${unrealPnL.toFixed(2)} | Net:${estNet >= 0 ? '+' : ''}$${estNet.toFixed(2)} | ${Math.floor(remaining/1000)}s`);
+        const lock = this.openTrade.profitLocked ? '🔒' : '';
+        console.log(`🔄 ${this.symbol} ${isLong ? '📈' : '📉'} ${lock} | Gross:${unrealPnL >= 0 ? '+' : ''}$${unrealPnL.toFixed(2)} | Net:${estNet >= 0 ? '+' : ''}$${estNet.toFixed(2)} | SL:$${this.openTrade.sl.toFixed(2)} | ${Math.floor(remaining/1000)}s`);
       }
     } catch(e) { console.error(`❌ ${this.symbol} sync: ${e.message}`); }
   }
@@ -191,7 +222,7 @@ class SymbolBot {
         const bearAssets = this.engine.bots
           .filter(b => b.symbol !== this.symbol)
           .filter(b => b.mtf?.lastAnalysis?.bias === 'BEAR').length;
-        if (bearAssets >= 4) {
+        if (bearAssets >= 7) {
           console.log(`⛔ ${this.symbol} LONG bloqué | Marché globalement baissier`);
           return;
         }
@@ -199,7 +230,7 @@ class SymbolBot {
         const bullAssets = this.engine.bots
           .filter(b => b.symbol !== this.symbol)
           .filter(b => b.mtf?.lastAnalysis?.bias === 'BULL').length;
-        if (bullAssets >= 4) {
+        if (bullAssets >= 7) {
           console.log(`⛔ ${this.symbol} SHORT bloqué | Marché globalement haussier`);
           return;
         }
@@ -245,6 +276,7 @@ class SymbolBot {
           highPrice: isLong ? price : Infinity,
           lowPrice: isLong ? 0 : price,
           direction: sig.direction,
+          profitLocked: false,
           openTime: Date.now(), leverage: lev,
           mtfScore, q: sig.q, tpPct, slPct
         };
@@ -292,11 +324,12 @@ class SymbolBot {
 
     console.log(`💹 ${this.symbol}: $${price.toFixed(2)} | Q:${sig.q.toFixed(0)} | RSI:${(sig.rsi||50).toFixed(0)} | ${dirIcon}${sig.action} | Lev:${sig.leverage}x | MTF:${mtfScore.toFixed(0)}(${mtfBias}) | Pos:${this.openTrade ? this.openTrade.direction : '0'}`);
 
+    // ✅ Gap réduit à 4s pour plus de fréquence
     if (
       (sig.action === 'BUY' || sig.action === 'SELL') &&
       sig.q >= 50 &&
       !this.openTrade &&
-      timeSinceLast >= 6000 &&
+      timeSinceLast >= 4000 &&
       this.engine.config.apiKey
     ) {
       await this.placeOrder(price, sig, mtfScore);
@@ -322,7 +355,6 @@ class TradingEngine {
     this.running = false;
     this.tradeCount = 0;
 
-    // ✅ Paliers recalibrés sur $2000
     this.profitTakingConfig = {
       10000: { toSave: 2000, newCapital: 8000,  done: false },
       20000: { toSave: 2000, newCapital: 18000, done: false },
@@ -330,7 +362,7 @@ class TradingEngine {
       50000: { toSave: 8000, newCapital: 42000, done: false }
     };
     this.pendingProfitTaking = null;
-    console.log(`⚙️  TradingEngine v7.0 BOT FINAL | Capital: $${this.capital}`);
+    console.log(`⚙️  TradingEngine v8.0 | ${SYMBOLS.length} assets | Capital: $${this.capital}`);
   }
 
   sign(params) {
@@ -364,11 +396,9 @@ class TradingEngine {
     });
   }
 
-  // ✅ Mises recalibrées $2000
   getStake() {
     const cap = this.capital;
     let base = 195, special = 325;
-
     if (cap >= 80000)      { base = 8500;  special = 14000; }
     else if (cap >= 40000) { base = 4500;  special = 7500;  }
     else if (cap >= 20000) { base = 2500;  special = 4200;  }
@@ -376,7 +406,6 @@ class TradingEngine {
     else if (cap >= 8000)  { base = 750;   special = 1250;  }
     else if (cap >= 4000)  { base = 390;   special = 650;   }
     else                   { base = 195;   special = 325;   }
-
     if (this.tradeCount > 0 && this.tradeCount % 10 === 0) {
       console.log(`💥 TRADE SPÉCIAL (1/10) | Mise: $${special}`);
       return special;
@@ -421,9 +450,9 @@ class TradingEngine {
   async start() {
     if (this.running) return;
     this.running = true;
-    console.log(`🚀 BOT FINAL | Capital:$${this.capital} | LONG+SHORT | 5 assets`);
-    console.log(`💰 Mise base:$195 → $8500 | Profit taking: $10k/$20k/$30k/$50k`);
-    console.log(`🎯 TP:+2/2.5% | SL:-1% trailing | Lev:3/7/12x | Fees:0.04% calculés`);
+    console.log(`🚀 BOT v8.0 | ${SYMBOLS.length} assets | Capital:$${this.capital}`);
+    console.log(`🎯 LONG+SHORT | Profit Lock +0.3% | Trailing -0.1% | Gap:4s | Timeout:2min`);
+    console.log(`📊 Assets: ${SYMBOLS.map(s => s.symbol).join(', ')}`);
     while (this.running) {
       try { await this.tick(); }
       catch(e) { console.error(`❌ Tick: ${e.message}`); }
@@ -435,12 +464,7 @@ class TradingEngine {
     this.running = false;
     const netPnL = this.closedTrades.reduce((s, t) => s + t.pnl, 0);
     const grossPnL = this.closedTrades.reduce((s, t) => s + (t.grossPnL || t.pnl), 0);
-    console.log(`⏸️  BOT STOPPÉ`);
-    console.log(`💰 Capital final: $${this.capital.toFixed(2)}`);
-    console.log(`📊 Gross PnL: ${grossPnL >= 0 ? '+' : ''}$${grossPnL.toFixed(2)}`);
-    console.log(`💸 Total Fees: -$${this.totalFees.toFixed(2)}`);
-    console.log(`✅ NET PnL: ${netPnL >= 0 ? '+' : ''}$${netPnL.toFixed(2)}`);
-    console.log(`📈 ROI NET: ${((netPnL/this.startCapital)*100).toFixed(2)}%`);
+    console.log(`⏸️  BOT STOPPÉ | Capital:$${this.capital.toFixed(2)} | Gross:${grossPnL >= 0 ? '+' : ''}$${grossPnL.toFixed(2)} | Fees:-$${this.totalFees.toFixed(2)} | NET:${netPnL >= 0 ? '+' : ''}$${netPnL.toFixed(2)}`);
   }
 
   getStats() {
@@ -465,8 +489,7 @@ class TradingEngine {
     return {
       openTrades: this.openTrades.length,
       closedTrades: totalTrades,
-      winTrades, lossTrades,
-      longTrades, shortTrades,
+      winTrades, lossTrades, longTrades, shortTrades,
       grossPnL: parseFloat(grossPnL.toFixed(2)),
       totalFees: parseFloat(this.totalFees.toFixed(2)),
       totalPnL: parseFloat(netPnL.toFixed(2)),
@@ -477,7 +500,7 @@ class TradingEngine {
       running: this.running,
       currentStake: this.getStake(),
       tradeCount: this.tradeCount,
-      mode: 'BOT FINAL — $2000',
+      mode: 'BOT v8.0 — 10 ASSETS',
       currentPrices, mtfScores,
       pendingProfitTaking: this.pendingProfitTaking
     };
