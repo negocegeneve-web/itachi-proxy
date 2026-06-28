@@ -11,7 +11,8 @@ class TradingEngine {
       mode: process.env.BINANCE_MODE || 'testnet',
       asset: process.env.ASSET || 'BTCUSDT',
       capital: parseInt(process.env.CAPITAL) || 500,
-      tickMs: 5000,
+      tickMs: 1000, // 1s pour 3-5 positions/min
+      maxPositions: 5,
       ...config
     };
     
@@ -22,8 +23,10 @@ class TradingEngine {
     this.capital = this.config.capital;
     this.startCapital = this.config.capital;
     this.running = false;
+    this.lastOpenTime = 0;
+    this.minTimeBeforeNewPosition = 12000; // Min 12s entre 2 ouvertures (5 par min max)
     
-    console.log(`⚙️  Trading Engine init | ${this.config.asset} | Capital: $${this.capital}`);
+    console.log(`⚙️  Trading Engine init | ${this.config.asset} | Capital: $${this.capital} | MaxPos: ${this.config.maxPositions}`);
   }
 
   async fetchRealPrice() {
@@ -59,45 +62,74 @@ class TradingEngine {
       try {
         const sig = this.swarm.coordinate(this.priceHistory, { capital: this.capital, trades: this.openTrades });
         
-        console.log(`💹 ${this.config.asset}: $${price.toFixed(2)} | Signal: ${sig.action} | Q:${Math.floor(sig.q)} | EMA Fast:${sig.emaFast.toFixed(2)} Slow:${sig.emaSlow.toFixed(2)} | Momentum:${sig.momentum.toFixed(6)}`);
+        console.log(`💹 ${this.config.asset}: $${price.toFixed(2)} | Signal: ${sig.action} | Q:${Math.floor(sig.q)} | Open: ${this.openTrades.length}/${this.config.maxPositions}`);
 
-        // Simulation: Ouvre trade si signal fort (Q >= 20) - THRESHOLD BAISSÉ
-        if (sig.action === 'BUY' && sig.q >= 20 && this.openTrades.length === 0) {
-          const stake = Math.round(this.capital * 0.08);
+        // Ouvre position SI :
+        // - Signal BUY
+        // - Q >= 20
+        // - Moins de MAX_POS positions ouvertes
+        // - Pas d'ordres contraires (on n'ouvre que des LONG)
+        // - Délai min respecté (3-5 par minute)
+        const now = Date.now();
+        const timeSinceLastOpen = now - this.lastOpenTime;
+        
+        if (
+          sig.action === 'BUY' && 
+          sig.q >= 20 && 
+          this.openTrades.length < this.config.maxPositions &&
+          timeSinceLastOpen >= this.minTimeBeforeNewPosition
+        ) {
+          const stake = Math.round(this.capital * 0.06); // 6% per trade
           const qty = stake / price;
           const trade = {
             id: Date.now(),
             entry: price,
             qty,
-            sl: price * 0.985,
-            tp: price * 1.02,
+            highPrice: price, // Pour trailing stop
+            sl: price * 0.99, // -1%
+            tp: price * 1.02, // +2%
             direction: 'LONG',
-            openTime: Date.now(),
+            openTime: now,
             signal: sig.action,
-            quality: sig.q
+            quality: sig.q,
+            leverage: sig.leverage
           };
           this.openTrades.push(trade);
-          console.log(`🎯 TRADE OPENED | Entry: $${price.toFixed(2)} | Q:${Math.floor(sig.q)} | SL: $${trade.sl.toFixed(2)} | TP: $${trade.tp.toFixed(2)}`);
+          this.lastOpenTime = now;
+          console.log(`🎯 TRADE #${this.openTrades.length} OPENED | Entry: $${price.toFixed(2)} | Q:${Math.floor(sig.q)} | SL: $${trade.sl.toFixed(2)} | TP: $${trade.tp.toFixed(2)}`);
         }
 
-        // Gère les trades ouverts (SL/TP)
+        // Gère les trades ouverts (SL/TP + TRAILING STOP)
         this.openTrades = this.openTrades.filter(trade => {
-          if (trade.direction === 'LONG') {
-            if (price <= trade.sl) {
-              const pnl = (trade.sl - trade.entry) * trade.qty;
-              this.closedTrades.push({...trade, exit: trade.sl, closeTime: Date.now(), pnl, status: 'SL'});
-              this.capital += pnl;
-              console.log(`❌ STOP LOSS HIT | Exit: $${trade.sl.toFixed(2)} | PnL: $${pnl.toFixed(2)}`);
-              return false;
-            }
-            if (price >= trade.tp) {
-              const pnl = (trade.tp - trade.entry) * trade.qty;
-              this.closedTrades.push({...trade, exit: trade.tp, closeTime: Date.now(), pnl, status: 'TP'});
-              this.capital += pnl;
-              console.log(`✅ TAKE PROFIT HIT | Exit: $${trade.tp.toFixed(2)} | PnL: $${pnl.toFixed(2)}`);
-              return false;
+          // Update high price pour trailing stop
+          if (price > trade.highPrice) {
+            trade.highPrice = price;
+            // Trailing SL : -1% du high price
+            const newSL = trade.highPrice * 0.99;
+            if (newSL > trade.sl) {
+              trade.sl = newSL;
+              console.log(`📈 TRAILING SL UPDATE | Trade #${this.openTrades.indexOf(trade) + 1} | New SL: $${trade.sl.toFixed(2)}`);
             }
           }
+
+          // Check SL
+          if (price <= trade.sl) {
+            const pnl = (trade.sl - trade.entry) * trade.qty;
+            this.closedTrades.push({...trade, exit: trade.sl, closeTime: Date.now(), pnl, status: 'SL'});
+            this.capital += pnl;
+            console.log(`❌ STOP LOSS HIT | Entry: $${trade.entry.toFixed(2)} | Exit: $${trade.sl.toFixed(2)} | PnL: $${pnl.toFixed(2)}`);
+            return false;
+          }
+
+          // Check TP
+          if (price >= trade.tp) {
+            const pnl = (trade.tp - trade.entry) * trade.qty;
+            this.closedTrades.push({...trade, exit: trade.tp, closeTime: Date.now(), pnl, status: 'TP'});
+            this.capital += pnl;
+            console.log(`✅ TAKE PROFIT HIT | Entry: $${trade.entry.toFixed(2)} | Exit: $${trade.tp.toFixed(2)} | PnL: $${pnl.toFixed(2)}`);
+            return false;
+          }
+
           return true;
         });
 
@@ -112,7 +144,7 @@ class TradingEngine {
   async start() {
     if (this.running) return;
     this.running = true;
-    console.log(`🚀 Trading Engine STARTED | ${this.config.asset} | Tick: ${this.config.tickMs}ms`);
+    console.log(`🚀 Trading Engine STARTED | ${this.config.asset} | Tick: ${this.config.tickMs}ms | MAX_POS: ${this.config.maxPositions}`);
     
     while (this.running) {
       try {
@@ -144,7 +176,8 @@ class TradingEngine {
       totalPnL: parseFloat(totalPnL.toFixed(2)),
       winRate: parseFloat(winRate),
       capital: this.capital,
-      running: this.running
+      running: this.running,
+      maxPositions: this.config.maxPositions
     };
   }
 }
