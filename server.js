@@ -37,20 +37,26 @@ http.createServer((req, res) => {
 
   if (req.url === '/health') {
     res.writeHead(200, { ...cors(), 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', name: 'Itachi Uchiwa Proxy v3.1' }));
+    res.end(JSON.stringify({ status: 'ok', name: 'Itachi Multi-Asset v4.0' }));
     return;
   }
 
   if (req.url === '/api/trades') {
     const stats = engine.getStats();
+    // Fix multi-asset : priceHistory depuis le premier bot BTC
+    const btcBot = engine.bots && engine.bots[0];
+    const priceHistory = btcBot && btcBot.priceHistory
+      ? btcBot.priceHistory.slice(-50)
+      : [];
+
     res.writeHead(200, { ...cors(), 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      trades: engine.openTrades,
-      closedTrades: engine.closedTrades,
-      capital: engine.capital,
-      running: engine.running,
-      priceHistory: engine.priceHistory.slice(-50),
-      stats: stats
+      trades: engine.openTrades || [],
+      closedTrades: engine.closedTrades || [],
+      capital: engine.capital || 500,
+      running: engine.running || false,
+      priceHistory,
+      stats
     }));
     return;
   }
@@ -76,24 +82,24 @@ http.createServer((req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CryptoSignal AI - Bot Simulator</title>
+  <title>CryptoSignal AI - Multi-Asset Bot</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color: #fff; padding: 20px; }
     .container { max-width: 1600px; margin: 0 auto; }
-    h1 { text-align: center; margin-bottom: 30px; font-size: 2.5em; }
+    h1 { text-align: center; margin-bottom: 30px; font-size: 2.2em; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
-    .card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 20px; backdrop-filter: blur(10px); }
+    .card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 20px; }
     .card-full { grid-column: 1 / -1; }
-    .chart-container { position: relative; height: 400px; }
-    .stat-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 15px; margin-top: 15px; }
-    .stat-item { background: rgba(255,255,255,0.08); padding: 15px; border-radius: 8px; text-align: center; }
-    .stat-label { font-size: 0.85em; opacity: 0.7; margin-bottom: 5px; }
-    .stat-value { font-size: 1.6em; font-weight: bold; }
+    .chart-container { position: relative; height: 350px; }
+    .stat-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 12px; margin-top: 15px; }
+    .stat-item { background: rgba(255,255,255,0.08); padding: 12px; border-radius: 8px; text-align: center; }
+    .stat-label { font-size: 0.8em; opacity: 0.7; margin-bottom: 5px; }
+    .stat-value { font-size: 1.5em; font-weight: bold; }
     .positive { color: #10b981; }
     .negative { color: #ef4444; }
-    .price { font-size: 2.2em; font-weight: bold; margin-bottom: 10px; }
+    .price { font-size: 2em; font-weight: bold; margin-bottom: 10px; }
     .button-group { display: flex; gap: 10px; margin: 20px 0; }
     .btn { padding: 14px 28px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 1em; transition: all 0.3s; }
     .btn-start { background: rgba(16,185,129,0.8); color: #fff; }
@@ -105,18 +111,19 @@ http.createServer((req, res) => {
     .status-bar.error { background: rgba(239,68,68,0.2); border-color: #ef4444; }
     .status-bar.stopped { background: rgba(156,163,175,0.2); border-color: #9ca3af; }
     table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-    th, td { padding: 12px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.9em; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.9em; }
     th { background: rgba(255,255,255,0.05); font-weight: 600; }
     tr:hover { background: rgba(255,255,255,0.03); }
     .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 0.8em; font-weight: bold; }
     .badge-tp { background: rgba(16,185,129,0.3); color: #10b981; }
     .badge-sl { background: rgba(239,68,68,0.3); color: #ef4444; }
-    .mode-badge { background: rgba(251,191,36,0.3); color: #fbbf24; padding: 4px 10px; border-radius: 4px; font-size: 0.85em; margin-left: 10px; }
+    .badge-symbol { background: rgba(99,102,241,0.3); color: #818cf8; margin-right: 5px; }
+    .mode-badge { background: rgba(251,191,36,0.3); color: #fbbf24; padding: 4px 10px; border-radius: 4px; font-size: 0.8em; margin-left: 10px; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>🤖 CryptoSignal AI <span class="mode-badge">TESTNET RÉEL</span></h1>
+    <h1>🤖 CryptoSignal AI <span class="mode-badge">MULTI-ASSET TESTNET</span></h1>
 
     <div class="status-bar" id="status">🟡 En attente...</div>
 
@@ -134,9 +141,9 @@ http.createServer((req, res) => {
 
     <div class="grid">
       <div class="card">
-        <h2>📊 Prix BTC Live</h2>
+        <h2>📊 BTC Live</h2>
         <div class="price" id="price">$--</div>
-        <div style="opacity:0.7; font-size:0.9em;">Mise à jour toutes les 5s</div>
+        <div style="opacity:0.7; font-size:0.9em;">5 assets surveillés : BTC ETH SOL BNB XRP</div>
       </div>
       <div class="card">
         <h2>💰 Portefeuille</h2>
@@ -189,16 +196,24 @@ http.createServer((req, res) => {
     <div class="card card-full">
       <h2>🎯 Positions Ouvertes</h2>
       <table>
-        <thead><tr><th>ID</th><th>Entry</th><th>Actuel</th><th>SL</th><th>TP</th><th>Mise</th><th>P&L</th><th>P&L %</th></tr></thead>
-        <tbody id="openBody"><tr><td colspan="8" style="text-align:center;opacity:0.5;">Aucune position</td></tr></tbody>
+        <thead>
+          <tr><th>Symbol</th><th>Entry</th><th>Actuel</th><th>SL</th><th>TP</th><th>Mise</th><th>P&L</th><th>P&L %</th></tr>
+        </thead>
+        <tbody id="openBody">
+          <tr><td colspan="8" style="text-align:center;opacity:0.5;">Aucune position</td></tr>
+        </tbody>
       </table>
     </div>
 
     <div class="card card-full">
       <h2>📝 Historique des Trades</h2>
       <table>
-        <thead><tr><th>Heure</th><th>Entry</th><th>Exit</th><th>Mise</th><th>Type</th><th>P&L</th><th>P&L %</th></tr></thead>
-        <tbody id="histBody"><tr><td colspan="7" style="text-align:center;opacity:0.5;">Aucun trade fermé</td></tr></tbody>
+        <thead>
+          <tr><th>Heure</th><th>Symbol</th><th>Entry</th><th>Exit</th><th>Mise</th><th>Type</th><th>P&L</th><th>P&L %</th></tr>
+        </thead>
+        <tbody id="histBody">
+          <tr><td colspan="8" style="text-align:center;opacity:0.5;">Aucun trade fermé</td></tr>
+        </tbody>
       </table>
     </div>
   </div>
@@ -207,6 +222,7 @@ http.createServer((req, res) => {
     const API = window.location.origin;
     let lastPrice = 0;
     let chart = null;
+    let lastPrices = {};
 
     function initChart() {
       const ctx = document.getElementById('priceChart').getContext('2d');
@@ -240,25 +256,29 @@ http.createServer((req, res) => {
     }
 
     async function startBot() {
-      const res = await fetch(API + '/api/engine/start', { method: 'POST' });
-      const data = await res.json();
-      if (data.running) {
-        document.getElementById('btnStart').disabled = true;
-        document.getElementById('btnStop').disabled = false;
-        document.getElementById('status').className = 'status-bar';
-        document.getElementById('status').textContent = '🟢 Bot EN COURS — Testnet Binance RÉEL';
-      }
+      try {
+        const res = await fetch(API + '/api/engine/start', { method: 'POST' });
+        const data = await res.json();
+        if (data.running) {
+          document.getElementById('btnStart').disabled = true;
+          document.getElementById('btnStop').disabled = false;
+          document.getElementById('status').className = 'status-bar';
+          document.getElementById('status').textContent = '🟢 Multi-Bot EN COURS — 5 assets Testnet RÉEL';
+        }
+      } catch(e) { console.error(e); }
     }
 
     async function stopBot() {
-      const res = await fetch(API + '/api/engine/stop', { method: 'POST' });
-      const data = await res.json();
-      if (!data.running) {
-        document.getElementById('btnStart').disabled = false;
-        document.getElementById('btnStop').disabled = true;
-        document.getElementById('status').className = 'status-bar stopped';
-        document.getElementById('status').textContent = '🔴 Bot ARRÊTÉ';
-      }
+      try {
+        const res = await fetch(API + '/api/engine/stop', { method: 'POST' });
+        const data = await res.json();
+        if (!data.running) {
+          document.getElementById('btnStart').disabled = false;
+          document.getElementById('btnStop').disabled = true;
+          document.getElementById('status').className = 'status-bar stopped';
+          document.getElementById('status').textContent = '🔴 Bot ARRÊTÉ';
+        }
+      } catch(e) { console.error(e); }
     }
 
     async function update() {
@@ -269,14 +289,15 @@ http.createServer((req, res) => {
         lastPrice = data.priceHistory && data.priceHistory.length > 0
           ? data.priceHistory[data.priceHistory.length - 1] : 0;
 
-        // Prix
         document.getElementById('price').textContent = '$' + lastPrice.toFixed(2);
-        document.getElementById('capital').textContent = '$' + data.capital.toFixed(2);
-        document.getElementById('totalPnL').textContent = (data.stats.totalPnL >= 0 ? '+' : '') + '$' + data.stats.totalPnL.toFixed(2);
-        document.getElementById('totalPnL').className = data.stats.totalPnL >= 0 ? 'positive' : 'negative';
-        document.getElementById('currentStake').textContent = '$' + data.stats.currentStake;
+        document.getElementById('capital').textContent = '$' + (data.capital || 500).toFixed(2);
 
-        // Graphique
+        const pnl = data.stats ? data.stats.totalPnL : 0;
+        document.getElementById('totalPnL').textContent = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
+        document.getElementById('totalPnL').className = pnl >= 0 ? 'positive' : 'negative';
+        document.getElementById('currentStake').textContent = '$' + (data.stats ? data.stats.currentStake : 45);
+
+        // Graphique BTC
         if (data.priceHistory && data.priceHistory.length > 0 && chart) {
           chart.data.labels = data.priceHistory.map((_, i) => i % 10 === 0 ? i : '');
           chart.data.datasets[0].data = data.priceHistory;
@@ -284,22 +305,24 @@ http.createServer((req, res) => {
         }
 
         // Stats
-        document.getElementById('openCount').textContent = data.stats.openTrades;
-        document.getElementById('totalCount').textContent = data.stats.closedTrades;
-        document.getElementById('winCount').textContent = data.stats.winTrades;
-        document.getElementById('lossCount').textContent = data.stats.lossTrades;
-        document.getElementById('winRate').textContent = data.stats.closedTrades > 0 ? data.stats.winRate + '%' : '--%';
-        document.getElementById('statPnL').textContent = (data.stats.totalPnL >= 0 ? '+' : '') + '$' + data.stats.totalPnL.toFixed(2);
-        document.getElementById('statPnL').className = data.stats.totalPnL >= 0 ? 'stat-value positive' : 'stat-value negative';
-        document.getElementById('statStatus').textContent = data.stats.running ? '🟢 ON' : '⏹️ OFF';
+        if (data.stats) {
+          document.getElementById('openCount').textContent = data.stats.openTrades || 0;
+          document.getElementById('totalCount').textContent = data.stats.closedTrades || 0;
+          document.getElementById('winCount').textContent = data.stats.winTrades || 0;
+          document.getElementById('lossCount').textContent = data.stats.lossTrades || 0;
+          document.getElementById('winRate').textContent = data.stats.closedTrades > 0 ? data.stats.winRate + '%' : '--%';
+          document.getElementById('statPnL').textContent = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
+          document.getElementById('statPnL').className = pnl >= 0 ? 'stat-value positive' : 'stat-value negative';
+          document.getElementById('statStatus').textContent = data.stats.running ? '🟢 ON' : '⏹️ OFF';
+        }
         document.getElementById('statTime').textContent = new Date().toLocaleTimeString('fr-FR');
 
-        // Boutons sync
-        if (data.stats.running) {
+        // Sync boutons
+        if (data.running) {
           document.getElementById('btnStart').disabled = true;
           document.getElementById('btnStop').disabled = false;
           document.getElementById('status').className = 'status-bar';
-          document.getElementById('status').textContent = '🟢 Bot EN COURS — Testnet Binance RÉEL';
+          document.getElementById('status').textContent = '🟢 Multi-Bot EN COURS — 5 assets Testnet RÉEL';
         }
 
         // Positions ouvertes
@@ -308,12 +331,13 @@ http.createServer((req, res) => {
           openBody.innerHTML = '<tr><td colspan="8" style="text-align:center;opacity:0.5;">Aucune position ouverte</td></tr>';
         } else {
           openBody.innerHTML = data.trades.map(t => {
-            const pnl = (lastPrice - t.entry) * t.qty;
-            const pnlPct = ((lastPrice - t.entry) / t.entry * 100).toFixed(2);
+            const currentP = t.symbol === 'BTCUSDT' ? lastPrice : (lastPrices[t.symbol] || t.entry);
+            const pnl = (currentP - t.entry) * t.qty;
+            const pnlPct = ((currentP - t.entry) / t.entry * 100).toFixed(2);
             return '<tr>' +
-              '<td>#' + String(t.id).slice(-5) + '</td>' +
+              '<td><span class="badge badge-symbol">' + (t.symbol || 'BTC') + '</span></td>' +
               '<td>$' + t.entry.toFixed(2) + '</td>' +
-              '<td>$' + lastPrice.toFixed(2) + '</td>' +
+              '<td>$' + currentP.toFixed(2) + '</td>' +
               '<td>$' + t.sl.toFixed(2) + '</td>' +
               '<td>$' + t.tp.toFixed(2) + '</td>' +
               '<td>$' + t.stake + '</td>' +
@@ -326,12 +350,13 @@ http.createServer((req, res) => {
         // Historique
         const histBody = document.getElementById('histBody');
         if (!data.closedTrades || data.closedTrades.length === 0) {
-          histBody.innerHTML = '<tr><td colspan="7" style="text-align:center;opacity:0.5;">Aucun trade fermé</td></tr>';
+          histBody.innerHTML = '<tr><td colspan="8" style="text-align:center;opacity:0.5;">Aucun trade fermé</td></tr>';
         } else {
           histBody.innerHTML = data.closedTrades.slice(-15).reverse().map(t => {
             const pnlPct = ((t.exit - t.entry) / t.entry * 100).toFixed(2);
             return '<tr>' +
               '<td>' + new Date(t.closeTime).toLocaleTimeString('fr-FR') + '</td>' +
+              '<td><span class="badge badge-symbol">' + (t.symbol || 'BTC') + '</span></td>' +
               '<td>$' + t.entry.toFixed(2) + '</td>' +
               '<td>$' + t.exit.toFixed(2) + '</td>' +
               '<td>$' + t.stake + '</td>' +
@@ -345,12 +370,13 @@ http.createServer((req, res) => {
       } catch(e) {
         document.getElementById('status').className = 'status-bar error';
         document.getElementById('status').textContent = '🔴 Erreur connexion';
+        console.error(e);
       }
     }
 
     initChart();
     update();
-    setInterval(update, 5000);
+    setInterval(update, 3000);
   </script>
 </body>
 </html>`);
@@ -402,6 +428,6 @@ http.createServer((req, res) => {
   res.end('Not found');
 
 }).listen(PORT, () => {
-  console.log('🎯 Itachi v3.1 running on port ' + PORT);
+  console.log('🎯 Itachi Multi-Asset v4.0 running on port ' + PORT);
   engine.start();
 });
