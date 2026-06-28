@@ -22,10 +22,11 @@ class SymbolBot {
     this.swarm = new TradingSwarm();
     this.mtf = new MultiTimeframeAnalyzer(this.symbol);
     this.priceHistory = [];
+    this.currentPrice = 0;
     this.openTrade = null;
     this.lastOpenTime = 0;
     this.lastMTFTime = 0;
-    this.MTF_REFRESH_MS = 30000; // Refresh MTF toutes les 30s
+    this.MTF_REFRESH_MS = 30000;
     this.TRADE_TIMEOUT_MS = 90000;
     console.log(`⚙️  SymbolBot | ${this.symbol}`);
   }
@@ -164,7 +165,6 @@ class SymbolBot {
       });
 
       if (order && order.orderId) {
-        // SL/TP selon volatilité symbol
         const slPct = ['SOLUSDT', 'XRPUSDT'].includes(this.symbol) ? 0.006 : 0.004;
         const tpPct = ['SOLUSDT', 'XRPUSDT'].includes(this.symbol) ? 0.010 : 0.008;
 
@@ -205,7 +205,7 @@ class SymbolBot {
         this.engine.tradeCount++;
         this.engine.openTrades.push(this.openTrade);
 
-        console.log(`✅ #${this.engine.tradeCount} ${this.symbol} | $${price} | SL:$${sl}(-${(slPct*100).toFixed(1)}%) | TP:$${tp}(+${(tpPct*100).toFixed(1)}%) | MTF:${mtfScore} | Lev:${lev}x`);
+        console.log(`✅ #${this.engine.tradeCount} ${this.symbol} | $${price} | SL:$${sl} | TP:$${tp} | MTF:${mtfScore} | Lev:${lev}x`);
       } else {
         console.error(`❌ ${this.symbol} rejeté: ${JSON.stringify(order)}`);
       }
@@ -218,6 +218,7 @@ class SymbolBot {
     const price = await this.fetchPrice();
     if (price === 0) return;
 
+    this.currentPrice = price; // ✅ Stocke le prix actuel
     this.priceHistory.push(price);
     if (this.priceHistory.length > 300) this.priceHistory.shift();
 
@@ -228,7 +229,6 @@ class SymbolBot {
       return;
     }
 
-    // Refresh MTF toutes les 30s
     const now = Date.now();
     if (now - this.lastMTFTime >= this.MTF_REFRESH_MS) {
       await this.mtf.analyze(price);
@@ -247,11 +247,6 @@ class SymbolBot {
 
     console.log(`💹 ${this.symbol}: $${price.toFixed(2)} | Q:${Math.floor(sig.q)} | ${sig.action} | MTF:${mtfScore.toFixed(0)}(${mtfBias}) | Pos:${this.openTrade ? '1' : '0'}`);
 
-    // ✅ OUVRE SEULEMENT SI :
-    // 1. Signal Ruflo BUY + Q >= 55
-    // 2. MTF Score >= 60 (majorité timeframes haussiers)
-    // 3. Pas de position ouverte
-    // 4. Délai 6s respecté
     if (
       sig.action === 'BUY' &&
       sig.q >= 55 &&
@@ -343,8 +338,7 @@ class TradingEngine {
     if (this.running) return;
     this.running = true;
     console.log(`🚀 MULTI-BOT MTF DÉMARRÉ | ${SYMBOLS.length} assets | Capital:$${this.capital}`);
-    console.log(`🎯 MTF: 21d/7d/24h/12h/4h/15m/3m/1m | S/R: 8 niveaux | Score>=60 | Q>=55`);
-    console.log(`⏱️  Timeout:90s | TP:+0.8% | SL:-0.4% | SOL/XRP: TP:+1% SL:-0.6%`);
+    console.log(`🎯 MTF Score>=60 | Q>=55 | TP:+0.8% | SL:-0.4% | SOL/XRP: TP:+1% SL:-0.6% | Timeout:90s`);
 
     while (this.running) {
       try {
@@ -368,6 +362,12 @@ class TradingEngine {
     const totalPnL = this.closedTrades.reduce((sum, t) => sum + t.pnl, 0);
     const winRate = totalTrades > 0 ? (winTrades / totalTrades * 100).toFixed(1) : 0;
 
+    // ✅ Prix actuels par symbol pour dashboard correct
+    const currentPrices = {};
+    this.bots.forEach(b => {
+      currentPrices[b.symbol] = b.currentPrice || 0;
+    });
+
     // MTF scores par asset
     const mtfScores = {};
     this.bots.forEach(b => {
@@ -390,6 +390,7 @@ class TradingEngine {
       currentStake: this.getStake(),
       tradeCount: this.tradeCount,
       mode: 'MULTI-ASSET MTF',
+      currentPrices, // ✅ Prix réels par asset
       mtfScores
     };
   }
