@@ -76,7 +76,7 @@ http.createServer((req, res) => {
     return;
   }
 
-  // Simulator dashboard
+  // Simulator dashboard avec graphique
   if (req.url === '/simulator') {
     res.writeHead(200, { ...cors(), 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`<!DOCTYPE html>
@@ -85,6 +85,7 @@ http.createServer((req, res) => {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CryptoSignal AI - Bot Simulator</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -93,7 +94,7 @@ http.createServer((req, res) => {
       color: #fff;
       padding: 20px;
     }
-    .container { max-width: 1400px; margin: 0 auto; }
+    .container { max-width: 1600px; margin: 0 auto; }
     h1 { text-align: center; margin-bottom: 30px; font-size: 2.5em; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
     .card {
@@ -103,7 +104,9 @@ http.createServer((req, res) => {
       padding: 20px;
       backdrop-filter: blur(10px);
     }
+    .card-full { grid-column: 1 / -1; }
     .stats { grid-column: 1 / -1; }
+    .chart-container { position: relative; height: 400px; margin-bottom: 20px; }
     .stat-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 15px; }
     .stat-item { background: rgba(255,255,255,0.08); padding: 15px; border-radius: 8px; text-align: center; }
     .stat-label { font-size: 0.9em; opacity: 0.7; margin-bottom: 5px; }
@@ -121,15 +124,9 @@ http.createServer((req, res) => {
       font-size: 1em;
       transition: all 0.3s;
     }
-    .btn-start {
-      background: rgba(16,185,129,0.8);
-      color: #fff;
-    }
+    .btn-start { background: rgba(16,185,129,0.8); color: #fff; }
     .btn-start:hover { background: rgba(16,185,129,1); transform: scale(1.05); }
-    .btn-stop {
-      background: rgba(239,68,68,0.8);
-      color: #fff;
-    }
+    .btn-stop { background: rgba(239,68,68,0.8); color: #fff; }
     .btn-stop:hover { background: rgba(239,68,68,1); transform: scale(1.05); }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .status-bar { 
@@ -161,6 +158,14 @@ http.createServer((req, res) => {
     <div class="button-group">
       <button class="btn btn-start" id="btnStart" onclick="startBot()">▶️ Lancer le Bot</button>
       <button class="btn btn-stop" id="btnStop" onclick="stopBot()" disabled>⏹️ Arrêter le Bot</button>
+    </div>
+
+    <!-- Graphique BTC -->
+    <div class="card card-full">
+      <h2>📈 Prix BTC en Direct</h2>
+      <div class="chart-container">
+        <canvas id="priceChart"></canvas>
+      </div>
     </div>
 
     <div class="grid">
@@ -219,7 +224,7 @@ http.createServer((req, res) => {
       </div>
     </div>
 
-    <div class="card">
+    <div class="card card-full">
       <h2>🎯 Positions Ouvertes</h2>
       <table id="openTable">
         <thead>
@@ -231,7 +236,7 @@ http.createServer((req, res) => {
       </table>
     </div>
 
-    <div class="card">
+    <div class="card card-full">
       <h2>📝 Historique des Trades</h2>
       <table id="historyTable">
         <thead>
@@ -247,6 +252,47 @@ http.createServer((req, res) => {
   <script>
     const API_URL = window.location.origin;
     let lastPrice = 0;
+    let chart = null;
+    const chartData = { labels: [], prices: [] };
+
+    // Initialiser le graphique
+    function initChart() {
+      const ctx = document.getElementById('priceChart').getContext('2d');
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: chartData.labels,
+          datasets: [{
+            label: 'BTC/USDT',
+            data: chartData.prices,
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+            borderWidth: 2,
+            tension: 0.4,
+            fill: true,
+            pointRadius: 0,
+            pointHoverRadius: 4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            y: {
+              ticks: { color: '#fff' },
+              grid: { color: 'rgba(255,255,255,0.1)' }
+            },
+            x: {
+              ticks: { color: '#fff' },
+              grid: { color: 'rgba(255,255,255,0.1)' }
+            }
+          }
+        }
+      });
+    }
 
     async function fetchBotData() {
       try {
@@ -305,6 +351,17 @@ http.createServer((req, res) => {
       document.getElementById('capital').textContent = '$' + data.capital.toFixed(2);
       document.getElementById('totalPnL').textContent = (data.stats.totalPnL >= 0 ? '+' : '') + '$' + data.stats.totalPnL.toFixed(2);
 
+      // Graphique
+      if (data.priceHistory && data.priceHistory.length > 0) {
+        chartData.prices = data.priceHistory;
+        chartData.labels = data.priceHistory.map((p, i) => i % 5 === 0 ? i : '');
+        if (chart) {
+          chart.data.labels = chartData.labels;
+          chart.data.datasets[0].data = chartData.prices;
+          chart.update('none');
+        }
+      }
+
       // Stats
       document.getElementById('openCount').textContent = data.stats.openTrades;
       document.getElementById('totalCount').textContent = data.stats.closedTrades;
@@ -339,6 +396,8 @@ http.createServer((req, res) => {
       }
     }
 
+    // Initialiser
+    initChart();
     update();
     setInterval(update, 5000);
   </script>
@@ -407,5 +466,4 @@ http.createServer((req, res) => {
 
 }).listen(PORT, () => {
   console.log('🎯 Itachi v3.1 running on port ' + PORT);
-  // Ne pas lancer automatiquement - attendre le bouton START
 });
