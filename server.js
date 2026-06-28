@@ -23,27 +23,24 @@ function cors() {
 }
 
 http.createServer((req, res) => {
-  if (req.method === 'OPTIONS') { 
-    res.writeHead(200, cors()); 
-    res.end(); 
-    return; 
+  if (req.method === 'OPTIONS') {
+    res.writeHead(200, cors());
+    res.end();
+    return;
   }
 
-  // Serve bot HTML
   if (req.url === '/' || req.url === '/bot') {
     res.writeHead(200, { ...cors(), 'Content-Type': 'text/html; charset=utf-8' });
     res.end(BOT_HTML);
     return;
   }
 
-  // Health check
   if (req.url === '/health') {
     res.writeHead(200, { ...cors(), 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok', name: 'Itachi Uchiwa Proxy v3.1' }));
     return;
   }
 
-  // Get bot trades state + stats
   if (req.url === '/api/trades') {
     const stats = engine.getStats();
     res.writeHead(200, { ...cors(), 'Content-Type': 'application/json' });
@@ -58,17 +55,13 @@ http.createServer((req, res) => {
     return;
   }
 
-  // Start engine
   if (req.url === '/api/engine/start' && req.method === 'POST') {
-    if (!engine.running) {
-      engine.start();
-    }
+    if (!engine.running) engine.start();
     res.writeHead(200, { ...cors(), 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'started', running: engine.running }));
     return;
   }
 
-  // Stop engine
   if (req.url === '/api/engine/stop' && req.method === 'POST') {
     engine.stop();
     res.writeHead(200, { ...cors(), 'Content-Type': 'application/json' });
@@ -76,7 +69,6 @@ http.createServer((req, res) => {
     return;
   }
 
-  // Simulator dashboard avec graphique
   if (req.url === '/simulator') {
     res.writeHead(200, { ...cors(), 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`<!DOCTYPE html>
@@ -88,81 +80,53 @@ http.createServer((req, res) => {
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-      color: #fff;
-      padding: 20px;
-    }
+    body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color: #fff; padding: 20px; }
     .container { max-width: 1600px; margin: 0 auto; }
     h1 { text-align: center; margin-bottom: 30px; font-size: 2.5em; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
-    .card {
-      background: rgba(255,255,255,0.05);
-      border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 12px;
-      padding: 20px;
-      backdrop-filter: blur(10px);
-    }
+    .card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 20px; backdrop-filter: blur(10px); }
     .card-full { grid-column: 1 / -1; }
-    .stats { grid-column: 1 / -1; }
-    .chart-container { position: relative; height: 400px; margin-bottom: 20px; }
-    .stat-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 15px; }
+    .chart-container { position: relative; height: 400px; }
+    .stat-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 15px; margin-top: 15px; }
     .stat-item { background: rgba(255,255,255,0.08); padding: 15px; border-radius: 8px; text-align: center; }
-    .stat-label { font-size: 0.9em; opacity: 0.7; margin-bottom: 5px; }
-    .stat-value { font-size: 1.8em; font-weight: bold; }
+    .stat-label { font-size: 0.85em; opacity: 0.7; margin-bottom: 5px; }
+    .stat-value { font-size: 1.6em; font-weight: bold; }
     .positive { color: #10b981; }
     .negative { color: #ef4444; }
-    .price { font-size: 2em; font-weight: bold; margin-bottom: 10px; }
+    .price { font-size: 2.2em; font-weight: bold; margin-bottom: 10px; }
     .button-group { display: flex; gap: 10px; margin: 20px 0; }
-    .btn {
-      padding: 12px 24px;
-      border: none;
-      border-radius: 8px;
-      font-weight: bold;
-      cursor: pointer;
-      font-size: 1em;
-      transition: all 0.3s;
-    }
+    .btn { padding: 14px 28px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 1em; transition: all 0.3s; }
     .btn-start { background: rgba(16,185,129,0.8); color: #fff; }
     .btn-start:hover { background: rgba(16,185,129,1); transform: scale(1.05); }
     .btn-stop { background: rgba(239,68,68,0.8); color: #fff; }
     .btn-stop:hover { background: rgba(239,68,68,1); transform: scale(1.05); }
-    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .status-bar { 
-      background: rgba(16,185,129,0.2); 
-      border: 1px solid #10b981; 
-      padding: 12px; 
-      border-radius: 8px; 
-      margin-bottom: 20px; 
-      text-align: center; 
-    }
-    .status-bar.error { 
-      background: rgba(239,68,68,0.2); 
-      border-color: #ef4444; 
-    }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+    .status-bar { background: rgba(16,185,129,0.2); border: 1px solid #10b981; padding: 12px; border-radius: 8px; margin-bottom: 20px; text-align: center; font-weight: bold; }
+    .status-bar.error { background: rgba(239,68,68,0.2); border-color: #ef4444; }
+    .status-bar.stopped { background: rgba(156,163,175,0.2); border-color: #9ca3af; }
     table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-    th, td { padding: 12px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); }
-    th { background: rgba(255,255,255,0.05); }
-    tr:hover { background: rgba(255,255,255,0.05); }
+    th, td { padding: 12px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 0.9em; }
+    th { background: rgba(255,255,255,0.05); font-weight: 600; }
+    tr:hover { background: rgba(255,255,255,0.03); }
+    .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 0.8em; font-weight: bold; }
+    .badge-tp { background: rgba(16,185,129,0.3); color: #10b981; }
+    .badge-sl { background: rgba(239,68,68,0.3); color: #ef4444; }
+    .mode-badge { background: rgba(251,191,36,0.3); color: #fbbf24; padding: 4px 10px; border-radius: 4px; font-size: 0.85em; margin-left: 10px; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>🤖 CryptoSignal AI - Simulateur Temps Réel</h1>
-    
-    <div class="status-bar" id="status">
-      🟢 Connecté | En attente de commande...
-    </div>
+    <h1>🤖 CryptoSignal AI <span class="mode-badge">TESTNET RÉEL</span></h1>
+
+    <div class="status-bar" id="status">🟡 En attente...</div>
 
     <div class="button-group">
       <button class="btn btn-start" id="btnStart" onclick="startBot()">▶️ Lancer le Bot</button>
       <button class="btn btn-stop" id="btnStop" onclick="stopBot()" disabled>⏹️ Arrêter le Bot</button>
     </div>
 
-    <!-- Graphique BTC -->
     <div class="card card-full">
-      <h2>📈 Prix BTC en Direct</h2>
+      <h2>📈 Prix BTC/USDT en Direct</h2>
       <div class="chart-container">
         <canvas id="priceChart"></canvas>
       </div>
@@ -171,22 +135,20 @@ http.createServer((req, res) => {
     <div class="grid">
       <div class="card">
         <h2>📊 Prix BTC Live</h2>
-        <div class="price" id="price">$60,000</div>
-        <div style="margin-top: 10px; font-size: 0.9em; opacity: 0.7;">
-          Mise à jour toutes les 5s
-        </div>
+        <div class="price" id="price">$--</div>
+        <div style="opacity:0.7; font-size:0.9em;">Mise à jour toutes les 5s</div>
       </div>
-
       <div class="card">
         <h2>💰 Portefeuille</h2>
         <div class="price" id="capital">$500.00</div>
-        <div style="margin-top: 10px; font-size: 0.9em;">
-          P&L: <span id="totalPnL" class="positive">+$0.00</span>
+        <div style="font-size:0.9em;">
+          P&L Total: <span id="totalPnL" class="positive">+$0.00</span><br>
+          Mise actuelle: <strong id="currentStake">$45</strong>
         </div>
       </div>
     </div>
 
-    <div class="card stats">
+    <div class="card card-full">
       <h2>📈 Statistiques</h2>
       <div class="stat-grid">
         <div class="stat-item">
@@ -198,16 +160,16 @@ http.createServer((req, res) => {
           <div class="stat-value" id="totalCount">0</div>
         </div>
         <div class="stat-item">
-          <div class="stat-label">Trades Gagnés ✅</div>
+          <div class="stat-label">✅ Gagnés</div>
           <div class="stat-value positive" id="winCount">0</div>
         </div>
         <div class="stat-item">
-          <div class="stat-label">Trades Perdus ❌</div>
+          <div class="stat-label">❌ Perdus</div>
           <div class="stat-value negative" id="lossCount">0</div>
         </div>
         <div class="stat-item">
           <div class="stat-label">Win Rate</div>
-          <div class="stat-value" id="winRate">--</div>
+          <div class="stat-value" id="winRate">--%</div>
         </div>
         <div class="stat-item">
           <div class="stat-label">Total PnL</div>
@@ -215,58 +177,48 @@ http.createServer((req, res) => {
         </div>
         <div class="stat-item">
           <div class="stat-label">Status</div>
-          <div class="stat-value" id="statStatus">⏹️ ARRÊTÉ</div>
+          <div class="stat-value" id="statStatus">⏹️</div>
         </div>
         <div class="stat-item">
           <div class="stat-label">Maj</div>
-          <div class="stat-value" id="statTime">--:--:--</div>
+          <div class="stat-value" id="statTime" style="font-size:1em;">--:--</div>
         </div>
       </div>
     </div>
 
     <div class="card card-full">
       <h2>🎯 Positions Ouvertes</h2>
-      <table id="openTable">
-        <thead>
-          <tr><th>ID</th><th>Entry</th><th>Actuel</th><th>SL</th><th>TP</th><th>P&L</th><th>P&L %</th></tr>
-        </thead>
-        <tbody id="openBody">
-          <tr><td colspan="7" style="text-align: center; opacity: 0.5;">Aucune position ouverte</td></tr>
-        </tbody>
+      <table>
+        <thead><tr><th>ID</th><th>Entry</th><th>Actuel</th><th>SL</th><th>TP</th><th>Mise</th><th>P&L</th><th>P&L %</th></tr></thead>
+        <tbody id="openBody"><tr><td colspan="8" style="text-align:center;opacity:0.5;">Aucune position</td></tr></tbody>
       </table>
     </div>
 
     <div class="card card-full">
       <h2>📝 Historique des Trades</h2>
-      <table id="historyTable">
-        <thead>
-          <tr><th>Temps</th><th>Entry</th><th>Exit</th><th>Type</th><th>P&L</th><th>P&L %</th></tr>
-        </thead>
-        <tbody id="historyBody">
-          <tr><td colspan="6" style="text-align: center; opacity: 0.5;">Aucun trade fermé</td></tr>
-        </tbody>
+      <table>
+        <thead><tr><th>Heure</th><th>Entry</th><th>Exit</th><th>Mise</th><th>Type</th><th>P&L</th><th>P&L %</th></tr></thead>
+        <tbody id="histBody"><tr><td colspan="7" style="text-align:center;opacity:0.5;">Aucun trade fermé</td></tr></tbody>
       </table>
     </div>
   </div>
 
   <script>
-    const API_URL = window.location.origin;
+    const API = window.location.origin;
     let lastPrice = 0;
     let chart = null;
-    const chartData = { labels: [], prices: [] };
 
-    // Initialiser le graphique
     function initChart() {
       const ctx = document.getElementById('priceChart').getContext('2d');
       chart = new Chart(ctx, {
         type: 'line',
         data: {
-          labels: chartData.labels,
+          labels: [],
           datasets: [{
             label: 'BTC/USDT',
-            data: chartData.prices,
+            data: [],
             borderColor: '#10b981',
-            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+            backgroundColor: 'rgba(16,185,129,0.1)',
             borderWidth: 2,
             tension: 0.4,
             fill: true,
@@ -277,126 +229,125 @@ http.createServer((req, res) => {
         options: {
           responsive: true,
           maintainAspectRatio: false,
-          plugins: {
-            legend: { display: false }
-          },
+          animation: false,
+          plugins: { legend: { display: false } },
           scales: {
-            y: {
-              ticks: { color: '#fff' },
-              grid: { color: 'rgba(255,255,255,0.1)' }
-            },
-            x: {
-              ticks: { color: '#fff' },
-              grid: { color: 'rgba(255,255,255,0.1)' }
-            }
+            y: { ticks: { color: '#fff', callback: v => '$' + v.toFixed(0) }, grid: { color: 'rgba(255,255,255,0.1)' } },
+            x: { ticks: { color: '#fff', maxTicksLimit: 10 }, grid: { color: 'rgba(255,255,255,0.05)' } }
           }
         }
       });
     }
 
-    async function fetchBotData() {
-      try {
-        const res = await fetch(API_URL + '/api/trades');
-        const data = await res.json();
-        return data;
-      } catch(e) {
-        console.error('Erreur:', e);
-        return null;
-      }
-    }
-
     async function startBot() {
-      try {
-        const res = await fetch(API_URL + '/api/engine/start', { method: 'POST' });
-        const data = await res.json();
-        if (data.running) {
-          document.getElementById('btnStart').disabled = true;
-          document.getElementById('btnStop').disabled = false;
-          document.getElementById('status').textContent = '🟢 Bot EN COURS D\\'EXÉCUTION';
-        }
-      } catch(e) {
-        console.error('Erreur start:', e);
+      const res = await fetch(API + '/api/engine/start', { method: 'POST' });
+      const data = await res.json();
+      if (data.running) {
+        document.getElementById('btnStart').disabled = true;
+        document.getElementById('btnStop').disabled = false;
+        document.getElementById('status').className = 'status-bar';
+        document.getElementById('status').textContent = '🟢 Bot EN COURS — Testnet Binance RÉEL';
       }
     }
 
     async function stopBot() {
-      try {
-        const res = await fetch(API_URL + '/api/engine/stop', { method: 'POST' });
-        const data = await res.json();
-        if (!data.running) {
-          document.getElementById('btnStart').disabled = false;
-          document.getElementById('btnStop').disabled = true;
-          document.getElementById('status').textContent = '🔴 Bot ARRÊTÉ';
-        }
-      } catch(e) {
-        console.error('Erreur stop:', e);
+      const res = await fetch(API + '/api/engine/stop', { method: 'POST' });
+      const data = await res.json();
+      if (!data.running) {
+        document.getElementById('btnStart').disabled = false;
+        document.getElementById('btnStop').disabled = true;
+        document.getElementById('status').className = 'status-bar stopped';
+        document.getElementById('status').textContent = '🔴 Bot ARRÊTÉ';
       }
     }
 
     async function update() {
-      const data = await fetchBotData();
-      
-      if (!data) {
-        document.getElementById('status').className = 'status-bar error';
-        document.getElementById('status').textContent = '🔴 Erreur connexion';
-        return;
-      }
+      try {
+        const res = await fetch(API + '/api/trades');
+        const data = await res.json();
 
-      // Prix
-      lastPrice = data.priceHistory && data.priceHistory.length > 0 
-        ? data.priceHistory[data.priceHistory.length - 1] 
-        : 0;
+        lastPrice = data.priceHistory && data.priceHistory.length > 0
+          ? data.priceHistory[data.priceHistory.length - 1] : 0;
 
-      document.getElementById('price').textContent = '$' + lastPrice.toFixed(2);
-      document.getElementById('capital').textContent = '$' + data.capital.toFixed(2);
-      document.getElementById('totalPnL').textContent = (data.stats.totalPnL >= 0 ? '+' : '') + '$' + data.stats.totalPnL.toFixed(2);
+        // Prix
+        document.getElementById('price').textContent = '$' + lastPrice.toFixed(2);
+        document.getElementById('capital').textContent = '$' + data.capital.toFixed(2);
+        document.getElementById('totalPnL').textContent = (data.stats.totalPnL >= 0 ? '+' : '') + '$' + data.stats.totalPnL.toFixed(2);
+        document.getElementById('totalPnL').className = data.stats.totalPnL >= 0 ? 'positive' : 'negative';
+        document.getElementById('currentStake').textContent = '$' + data.stats.currentStake;
 
-      // Graphique
-      if (data.priceHistory && data.priceHistory.length > 0) {
-        chartData.prices = data.priceHistory;
-        chartData.labels = data.priceHistory.map((p, i) => i % 5 === 0 ? i : '');
-        if (chart) {
-          chart.data.labels = chartData.labels;
-          chart.data.datasets[0].data = chartData.prices;
+        // Graphique
+        if (data.priceHistory && data.priceHistory.length > 0 && chart) {
+          chart.data.labels = data.priceHistory.map((_, i) => i % 10 === 0 ? i : '');
+          chart.data.datasets[0].data = data.priceHistory;
           chart.update('none');
         }
-      }
 
-      // Stats
-      document.getElementById('openCount').textContent = data.stats.openTrades;
-      document.getElementById('totalCount').textContent = data.stats.closedTrades;
-      document.getElementById('winCount').textContent = data.stats.winTrades;
-      document.getElementById('lossCount').textContent = data.stats.lossTrades;
-      document.getElementById('winRate').textContent = data.stats.totalPnL > 0 ? data.stats.winRate + '%' : '--';
-      document.getElementById('statPnL').textContent = (data.stats.totalPnL >= 0 ? '+' : '') + '$' + data.stats.totalPnL.toFixed(2);
-      document.getElementById('statStatus').textContent = data.stats.running ? '🟢 RUNNING' : '⏹️ STOPPED';
-      document.getElementById('statTime').textContent = new Date().toLocaleTimeString('fr-FR');
+        // Stats
+        document.getElementById('openCount').textContent = data.stats.openTrades;
+        document.getElementById('totalCount').textContent = data.stats.closedTrades;
+        document.getElementById('winCount').textContent = data.stats.winTrades;
+        document.getElementById('lossCount').textContent = data.stats.lossTrades;
+        document.getElementById('winRate').textContent = data.stats.closedTrades > 0 ? data.stats.winRate + '%' : '--%';
+        document.getElementById('statPnL').textContent = (data.stats.totalPnL >= 0 ? '+' : '') + '$' + data.stats.totalPnL.toFixed(2);
+        document.getElementById('statPnL').className = data.stats.totalPnL >= 0 ? 'stat-value positive' : 'stat-value negative';
+        document.getElementById('statStatus').textContent = data.stats.running ? '🟢 ON' : '⏹️ OFF';
+        document.getElementById('statTime').textContent = new Date().toLocaleTimeString('fr-FR');
 
-      // Positions ouvertes
-      const openBody = document.getElementById('openBody');
-      if (data.trades.length === 0) {
-        openBody.innerHTML = '<tr><td colspan="7" style="text-align: center; opacity: 0.5;">Aucune position ouverte</td></tr>';
-      } else {
-        openBody.innerHTML = data.trades.map(t => {
-          const pnl = (lastPrice - t.entry) * t.qty;
-          const pnlPct = (pnl / (t.entry * t.qty) * 100).toFixed(2);
-          return '<tr><td>#' + t.id.toString().slice(-4) + '</td><td>$' + t.entry.toFixed(2) + '</td><td>$' + lastPrice.toFixed(2) + '</td><td>$' + t.sl.toFixed(2) + '</td><td>$' + t.tp.toFixed(2) + '</td><td class="' + (pnl >= 0 ? 'positive' : 'negative') + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) + '</td><td class="' + (pnl >= 0 ? 'positive' : 'negative') + '">' + (pnl >= 0 ? '+' : '') + pnlPct + '%</td></tr>';
-        }).join('');
-      }
+        // Boutons sync
+        if (data.stats.running) {
+          document.getElementById('btnStart').disabled = true;
+          document.getElementById('btnStop').disabled = false;
+          document.getElementById('status').className = 'status-bar';
+          document.getElementById('status').textContent = '🟢 Bot EN COURS — Testnet Binance RÉEL';
+        }
 
-      // Historique
-      const histBody = document.getElementById('historyBody');
-      if (data.closedTrades.length === 0) {
-        histBody.innerHTML = '<tr><td colspan="6" style="text-align: center; opacity: 0.5;">Aucun trade fermé</td></tr>';
-      } else {
-        histBody.innerHTML = data.closedTrades.slice(-10).reverse().map(t => {
-          const pnlPct = (t.pnl / (t.entry * t.qty) * 100).toFixed(2);
-          return '<tr><td>' + new Date(t.closeTime).toLocaleTimeString('fr-FR') + '</td><td>$' + t.entry.toFixed(2) + '</td><td>$' + t.exit.toFixed(2) + '</td><td>' + t.status + '</td><td class="' + (t.pnl >= 0 ? 'positive' : 'negative') + '">' + (t.pnl >= 0 ? '+' : '') + '$' + t.pnl.toFixed(2) + '</td><td class="' + (t.pnl >= 0 ? 'positive' : 'negative') + '">' + (t.pnl >= 0 ? '+' : '') + pnlPct + '%</td></tr>';
-        }).join('');
+        // Positions ouvertes
+        const openBody = document.getElementById('openBody');
+        if (!data.trades || data.trades.length === 0) {
+          openBody.innerHTML = '<tr><td colspan="8" style="text-align:center;opacity:0.5;">Aucune position ouverte</td></tr>';
+        } else {
+          openBody.innerHTML = data.trades.map(t => {
+            const pnl = (lastPrice - t.entry) * t.qty;
+            const pnlPct = ((lastPrice - t.entry) / t.entry * 100).toFixed(2);
+            return '<tr>' +
+              '<td>#' + String(t.id).slice(-5) + '</td>' +
+              '<td>$' + t.entry.toFixed(2) + '</td>' +
+              '<td>$' + lastPrice.toFixed(2) + '</td>' +
+              '<td>$' + t.sl.toFixed(2) + '</td>' +
+              '<td>$' + t.tp.toFixed(2) + '</td>' +
+              '<td>$' + t.stake + '</td>' +
+              '<td class="' + (pnl >= 0 ? 'positive' : 'negative') + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) + '</td>' +
+              '<td class="' + (pnl >= 0 ? 'positive' : 'negative') + '">' + (pnl >= 0 ? '+' : '') + pnlPct + '%</td>' +
+              '</tr>';
+          }).join('');
+        }
+
+        // Historique
+        const histBody = document.getElementById('histBody');
+        if (!data.closedTrades || data.closedTrades.length === 0) {
+          histBody.innerHTML = '<tr><td colspan="7" style="text-align:center;opacity:0.5;">Aucun trade fermé</td></tr>';
+        } else {
+          histBody.innerHTML = data.closedTrades.slice(-15).reverse().map(t => {
+            const pnlPct = ((t.exit - t.entry) / t.entry * 100).toFixed(2);
+            return '<tr>' +
+              '<td>' + new Date(t.closeTime).toLocaleTimeString('fr-FR') + '</td>' +
+              '<td>$' + t.entry.toFixed(2) + '</td>' +
+              '<td>$' + t.exit.toFixed(2) + '</td>' +
+              '<td>$' + t.stake + '</td>' +
+              '<td><span class="badge ' + (t.status === 'TP' ? 'badge-tp' : 'badge-sl') + '">' + t.status + '</span></td>' +
+              '<td class="' + (t.pnl >= 0 ? 'positive' : 'negative') + '">' + (t.pnl >= 0 ? '+' : '') + '$' + t.pnl.toFixed(2) + '</td>' +
+              '<td class="' + (t.pnl >= 0 ? 'positive' : 'negative') + '">' + (t.pnl >= 0 ? '+' : '') + pnlPct + '%</td>' +
+              '</tr>';
+          }).join('');
+        }
+
+      } catch(e) {
+        document.getElementById('status').className = 'status-bar error';
+        document.getElementById('status').textContent = '🔴 Erreur connexion';
       }
     }
 
-    // Initialiser
     initChart();
     update();
     setInterval(update, 5000);
@@ -406,7 +357,6 @@ http.createServer((req, res) => {
     return;
   }
 
-  // Binance proxy
   if (req.url === '/api/binance') {
     let body = '';
     req.on('data', c => body += c);
@@ -416,54 +366,42 @@ http.createServer((req, res) => {
         const k = req.headers['x-api-key'];
         const s = req.headers['x-api-secret'];
         const mode = req.headers['x-bn-mode'] || 'testnet';
-        if (!k || !s) { 
-          res.writeHead(400, cors()); 
-          res.end(JSON.stringify({error:'Clés manquantes'})); 
-          return; 
+        if (!k || !s) {
+          res.writeHead(400, cors());
+          res.end(JSON.stringify({ error: 'Clés manquantes' }));
+          return;
         }
         const BASE = mode === 'mainnet' ? 'fapi.binance.com' : 'demo-fapi.binance.com';
         const ts = Date.now();
-        const qBase = Object.entries({...params, timestamp: ts}).map(([a,b]) => a+'='+b).join('&');
+        const qBase = Object.entries({ ...params, timestamp: ts }).map(([a, b]) => a + '=' + b).join('&');
         const sig = hmacSHA256(s, qBase);
         const query = qBase + '&signature=' + sig;
-        const rPath = (m === 'GET') ? p + '?' + query : p;
+        const rPath = m === 'GET' ? p + '?' + query : p;
         const pb = (m === 'POST' || m === 'DELETE') ? query : '';
         const opts = {
-          hostname: BASE, 
-          path: rPath, 
-          method: m,
-          headers: { 
-            'X-MBX-APIKEY': k, 
-            'Content-Type': 'application/x-www-form-urlencoded', 
-            'Content-Length': Buffer.byteLength(pb) 
-          }
+          hostname: BASE, path: rPath, method: m,
+          headers: { 'X-MBX-APIKEY': k, 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(pb) }
         };
         const pr = https.request(opts, r2 => {
           let d = '';
           r2.on('data', c => d += c);
-          r2.on('end', () => { 
-            res.writeHead(200, {...cors(),'Content-Type':'application/json'}); 
-            res.end(d); 
-          });
+          r2.on('end', () => { res.writeHead(200, { ...cors(), 'Content-Type': 'application/json' }); res.end(d); });
         });
-        pr.on('error', e => { 
-          res.writeHead(500, cors()); 
-          res.end(JSON.stringify({error:e.message})); 
-        });
+        pr.on('error', e => { res.writeHead(500, cors()); res.end(JSON.stringify({ error: e.message })); });
         if (pb) pr.write(pb);
         pr.end();
-      } catch(e) { 
-        res.writeHead(500, cors()); 
-        res.end(JSON.stringify({error:e.message})); 
+      } catch(e) {
+        res.writeHead(500, cors());
+        res.end(JSON.stringify({ error: e.message }));
       }
-    }); 
+    });
     return;
   }
 
-  // 404
-  res.writeHead(404, cors()); 
+  res.writeHead(404, cors());
   res.end('Not found');
 
 }).listen(PORT, () => {
   console.log('🎯 Itachi v3.1 running on port ' + PORT);
+  engine.start();
 });
