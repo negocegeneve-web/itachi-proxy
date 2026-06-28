@@ -1,12 +1,9 @@
 // trading-engine.js
-// Bot RÉEL Binance Futures Testnet
-
 const https = require('https');
 const crypto = require('crypto');
 const { TradingSwarm } = require('./ruflo-trader');
 
 const BASE_URL = 'testnet.binancefuture.com';
-const WS_BASE = 'wss://stream.binancefuture.com/ws';
 
 class TradingEngine {
   constructor(config = {}) {
@@ -31,23 +28,17 @@ class TradingEngine {
     this.lastOpenTime = 0;
     this.tradeCount = 0;
     this.currentPrice = 0;
+    this.tickCounter = 0;
 
     console.log(`⚙️  Bot Binance Testnet | ${this.config.asset} | Capital: $${this.capital}`);
   }
 
-  // ✅ SIGNATURE BINANCE
   sign(params) {
-    const query = Object.entries(params)
-      .map(([k, v]) => `${k}=${v}`)
-      .join('&');
-    const sig = crypto
-      .createHmac('sha256', this.config.apiSecret)
-      .update(query)
-      .digest('hex');
+    const query = Object.entries(params).map(([k, v]) => `${k}=${v}`).join('&');
+    const sig = crypto.createHmac('sha256', this.config.apiSecret).update(query).digest('hex');
     return `${query}&signature=${sig}`;
   }
 
-  // ✅ REQUEST BINANCE TESTNET
   async request(method, path, params = {}) {
     params.timestamp = Date.now();
     params.recvWindow = 5000;
@@ -63,7 +54,6 @@ class TradingEngine {
           'Content-Type': 'application/x-www-form-urlencoded'
         }
       };
-
       const req = https.request(options, res => {
         let body = '';
         res.on('data', c => body += c);
@@ -78,7 +68,6 @@ class TradingEngine {
     });
   }
 
-  // ✅ CALCUL MISE SELON CAPITAL
   getStake() {
     let stake = 45;
     let threshold = 500;
@@ -93,7 +82,6 @@ class TradingEngine {
     return parseFloat(stake.toFixed(2));
   }
 
-  // ✅ PLACER ORDRE RÉEL BINANCE TESTNET
   async placeOrder(price) {
     try {
       const stake = this.getStake();
@@ -116,7 +104,7 @@ class TradingEngine {
         quantity: qty
       });
 
-      if (order.orderId) {
+      if (order && order.orderId) {
         const sl = parseFloat((price * 0.99).toFixed(2));
         const tp = parseFloat((price * 1.02).toFixed(2));
 
@@ -138,7 +126,6 @@ class TradingEngine {
           closePosition: 'true'
         });
 
-        // 6. Enregistre en local pour le dashboard
         this.openTrades.push({
           id: order.orderId,
           entry: price,
@@ -163,18 +150,19 @@ class TradingEngine {
     }
   }
 
-  // ✅ VÉRIFIER POSITIONS RÉELLES BINANCE
   async syncPositions() {
     try {
-      const positions = await this.request('GET', '/fapi/v2/positionRisk', {
+      const result = await this.request('GET', '/fapi/v2/positionRisk', {
         symbol: this.config.asset
       });
 
-      const active = positions.filter(p => parseFloat(p.positionAmt) !== 0);
+      // FIX : vérifie que c'est bien un tableau
+      const positions = Array.isArray(result) ? result : [];
+      const active = positions.filter(p => Math.abs(parseFloat(p.positionAmt)) > 0);
 
-      // Met à jour openTrades selon Binance
+      console.log(`🔄 Sync | Positions Binance actives: ${active.length} | Local: ${this.openTrades.length}`);
+
       if (active.length === 0 && this.openTrades.length > 0) {
-        // Positions fermées par Binance (SL/TP atteint)
         this.openTrades.forEach(t => {
           const pnl = (this.currentPrice - t.entry) * t.qty;
           this.closedTrades.push({
@@ -185,6 +173,7 @@ class TradingEngine {
             status: pnl > 0 ? 'TP' : 'SL'
           });
           this.capital += pnl;
+          console.log(`📊 Trade fermé | PnL: $${pnl.toFixed(2)} | Capital: $${this.capital.toFixed(2)}`);
         });
         this.openTrades = [];
       }
@@ -193,12 +182,11 @@ class TradingEngine {
     }
   }
 
-  // ✅ FETCH PRIX BINANCE
   async fetchPrice() {
     try {
       const data = await new Promise((resolve, reject) => {
         https.get({
-          hostname: 'testnet.binancefuture.com',
+          hostname: BASE_URL,
           path: `/fapi/v1/ticker/price?symbol=${this.config.asset}`
         }, res => {
           let body = '';
@@ -216,8 +204,8 @@ class TradingEngine {
     }
   }
 
-  // ✅ TICK PRINCIPAL
   async tick() {
+    this.tickCounter++;
     const price = await this.fetchPrice();
     if (price === 0) return;
 
@@ -225,8 +213,8 @@ class TradingEngine {
     this.priceHistory.push(price);
     if (this.priceHistory.length > 300) this.priceHistory.shift();
 
-    // Sync avec Binance toutes les 5 ticks
-    if (this.tradeCount % 5 === 0) {
+    // Sync Binance toutes les 10 ticks
+    if (this.tickCounter % 10 === 0) {
       await this.syncPositions();
     }
 
@@ -241,13 +229,12 @@ class TradingEngine {
         const timeSinceLast = now - this.lastOpenTime;
         const stake = this.getStake();
 
-        console.log(`💹 $${price.toFixed(2)} | Q:${Math.floor(sig.q)} | Mise:$${stake} | Open:${this.openTrades.length}/${this.config.maxPositions} | Capital:$${this.capital.toFixed(2)}`);
+        console.log(`💹 $${price.toFixed(2)} | Q:${Math.floor(sig.q)} | Action:${sig.action} | Mise:$${stake} | Open:${this.openTrades.length}/${this.config.maxPositions} | Capital:$${this.capital.toFixed(2)}`);
 
-        // ✅ CONDITION OUVERTURE
+        // Condition ouverture : Q >= 30 (abaissé pour plus de trades)
         const highProb = sig.action === 'BUY' &&
-          sig.q >= 45 &&
-          sig.emaFast > sig.emaSlow &&
-          sig.momentum > 0;
+          sig.q >= 30 &&
+          sig.emaFast > sig.emaSlow;
 
         if (
           highProb &&
@@ -269,7 +256,7 @@ class TradingEngine {
   async start() {
     if (this.running) return;
     this.running = true;
-    console.log(`🚀 BOT DÉMARRÉ | ${this.config.asset} | Capital:$${this.capital} | Mode: TESTNET RÉEL`);
+    console.log(`🚀 BOT DÉMARRÉ | ${this.config.asset} | Capital:$${this.capital} | TESTNET RÉEL`);
 
     while (this.running) {
       try {
