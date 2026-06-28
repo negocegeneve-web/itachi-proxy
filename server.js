@@ -406,7 +406,7 @@ async function update() {
           '<td>$'+t.tp.toFixed(2)+'</td>'+
           '<td>$'+t.stake+'</td>'+
           '<td>'+t.leverage+'x</td>'+
-          '<td>'+(t.q||'--').toFixed?t.q.toFixed(0):(t.q||'--')+'</td>'+
+          '<td>'+(t.q ? Math.round(t.q) : '--')+'</td>'+
           '<td class="'+(grossPnl>=0?'positive':'negative')+'">'+(grossPnl>=0?'+':'')+' $'+grossPnl.toFixed(2)+'</td>'+
           '<td class="negative">-$'+fees.toFixed(2)+'</td>'+
           '<td class="'+(netP>=0?'positive':'negative')+'">'+(netP>=0?'+':'')+' $'+netP.toFixed(2)+'</td>'+
