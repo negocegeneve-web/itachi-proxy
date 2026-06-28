@@ -1,510 +1,182 @@
-const https = require('https');
-const crypto = require('crypto');
-const { TradingSwarm } = require('./ruflo-trader');
-const MultiTimeframeAnalyzer = require('./multi-timeframe');
-
-const BASE_URL = 'testnet.binancefuture.com';
-const TAKER_FEE = 0.0004;
-
-// ✅ 10 assets pour 10 trades simultanés
-const SYMBOLS = [
-  { symbol: 'BTCUSDT',  precision: 3, minQty: 0.001 },
-  { symbol: 'ETHUSDT',  precision: 3, minQty: 0.001 },
-  { symbol: 'SOLUSDT',  precision: 1, minQty: 0.1   },
-  { symbol: 'BNBUSDT',  precision: 2, minQty: 0.01  },
-  { symbol: 'XRPUSDT',  precision: 0, minQty: 1     },
-  { symbol: 'DOGEUSDT', precision: 0, minQty: 1     },
-  { symbol: 'ADAUSDT',  precision: 0, minQty: 1     },
-  { symbol: 'DOTUSDT',  precision: 1, minQty: 0.1   },
-  { symbol: 'LINKUSDT', precision: 1, minQty: 0.1   },
-  { symbol: 'LTCUSDT',  precision: 3, minQty: 0.001 }
-];
-
-class SymbolBot {
-  constructor(symbolConfig, engine) {
-    this.symbol = symbolConfig.symbol;
-    this.precision = symbolConfig.precision;
-    this.minQty = symbolConfig.minQty;
-    this.engine = engine;
-    this.swarm = new TradingSwarm();
-    this.mtf = new MultiTimeframeAnalyzer(this.symbol);
-    this.priceHistory = [];
-    this.currentPrice = 0;
-    this.openTrade = null;
-    this.lastOpenTime = 0;
-    this.lastMTFTime = 0;
-    this.MTF_REFRESH_MS = 60000;
-    this.TRADE_TIMEOUT_MS = 120000; // ✅ 2min timeout
-    this.PROFIT_LOCK_PCT = 0.003;   // ✅ Lock profit à +0.3%
-    this.PROFIT_TRAIL_PCT = 0.001;  // ✅ Trailing -0.1% après lock
-    console.log(`⚙️  SymbolBot | ${this.symbol}`);
-  }
-
-  async fetchPrice() {
+class StrategyAgent {
+  analyze(priceData) {
     try {
-      const data = await new Promise((resolve, reject) => {
-        https.get({
-          hostname: BASE_URL,
-          path: `/fapi/v1/ticker/price?symbol=${this.symbol}`
-        }, res => {
-          let body = '';
-          res.on('data', c => body += c);
-          res.on('end', () => { try { resolve(JSON.parse(body)); } catch(e) { reject(e); } });
-        }).on('error', reject);
-      });
-      return parseFloat(data.price);
-    } catch(e) { return 0; }
-  }
+      if (!priceData || !Array.isArray(priceData) || priceData.length < 21) {
+        return { action: 'HOLD', q: 0, rsi: 50, direction: 'NONE', emaFast: 0, emaSlow: 0, momentum: 0 };
+      }
 
-  calcFees(entry, exit, qty) {
-    return parseFloat(((entry * qty * TAKER_FEE) + (exit * qty * TAKER_FEE)).toFixed(4));
-  }
+      const emaFast = this.calcEMA(priceData, 8);
+      const emaSlow = this.calcEMA(priceData, 21);
+      const rsi = this.calcRSI(priceData, 14);
+      const last = priceData[priceData.length - 1];
+      const prev = priceData[priceData.length - 2];
+      const prev5 = priceData[Math.max(0, priceData.length - 6)];
+      const momentum = last - prev;
+      const momentum5 = last - prev5;
+      const ma20 = priceData.slice(-20).reduce((a,b) => a+b, 0) / Math.min(20, priceData.length);
 
-  async forceClose(price, reason) {
-    try {
-      const isLong = this.openTrade.direction === 'LONG';
-      const grossPnL = isLong
-        ? (price - this.openTrade.entry) * this.openTrade.qty
-        : (this.openTrade.entry - price) * this.openTrade.qty;
-      const fees = this.calcFees(this.openTrade.entry, price, this.openTrade.qty);
-      const netPnL = grossPnL - fees;
+      let action = 'HOLD';
+      let direction = 'NONE';
+      let q = 0;
 
-      console.log(`⏱️  ${this.symbol} CLOSE | ${reason} | Net:${netPnL >= 0 ? '+' : ''}$${netPnL.toFixed(2)}`);
+      // Signal LONG
+      if (emaFast > emaSlow && last > ma20 && momentum > 0 && rsi > 30 && rsi < 70) {
+        action = 'BUY';
+        direction = 'LONG';
+        q = 55;
+        const spread = (emaFast - emaSlow) / emaSlow * 100;
+        q += Math.min(15, spread * 300);
+        const momStrength = Math.abs(momentum5) / Math.max(prev5, 0.001) * 100;
+        q += Math.min(15, momStrength * 2000);
+        if (rsi >= 40 && rsi <= 60) q += 15;
+        else if (rsi >= 35 && rsi <= 65) q += 8;
+      }
+      // Signal SHORT
+      else if (emaFast < emaSlow && last < ma20 && momentum < 0 && rsi > 30 && rsi < 70) {
+        action = 'SELL';
+        direction = 'SHORT';
+        q = 55;
+        const spread = (emaSlow - emaFast) / emaSlow * 100;
+        q += Math.min(15, spread * 300);
+        const momStrength = Math.abs(momentum5) / Math.max(prev5, 0.001) * 100;
+        q += Math.min(15, momStrength * 2000);
+        if (rsi >= 40 && rsi <= 60) q += 15;
+        else if (rsi >= 35 && rsi <= 65) q += 8;
+      }
 
-      await this.engine.request('DELETE', '/fapi/v1/allOpenOrders', { symbol: this.symbol });
-      await this.engine.request('POST', '/fapi/v1/order', {
-        symbol: this.symbol,
-        side: isLong ? 'SELL' : 'BUY',
-        type: 'MARKET',
-        quantity: this.openTrade.qty,
-        reduceOnly: 'true'
-      });
+      // RSI extrêmes
+      if (rsi < 30 && momentum > 0) { action = 'BUY'; direction = 'LONG'; q = Math.max(q, 60); }
+      if (rsi > 70 && momentum < 0) { action = 'SELL'; direction = 'SHORT'; q = Math.max(q, 60); }
 
-      const closedTrade = {
-        ...this.openTrade, exit: price, closeTime: Date.now(),
-        grossPnL: parseFloat(grossPnL.toFixed(4)),
-        fees, pnl: parseFloat(netPnL.toFixed(4)),
-        status: netPnL > 0 ? 'TIMEOUT+' : 'TIMEOUT-'
+      q = Math.min(100, Math.max(0, q));
+
+      return {
+        action, direction,
+        q: parseFloat(q.toFixed(2)),
+        rsi: parseFloat(rsi.toFixed(2)),
+        emaFast: parseFloat(emaFast.toFixed(4)),
+        emaSlow: parseFloat(emaSlow.toFixed(4)),
+        momentum: parseFloat(momentum.toFixed(6)),
+        momentum5: parseFloat(momentum5.toFixed(6)),
+        ma20: parseFloat(ma20.toFixed(2))
       };
-
-      this.engine.closedTrades.push(closedTrade);
-      this.engine.totalFees += fees;
-      this.engine.capital += netPnL;
-      this.engine.openTrades = this.engine.openTrades.filter(t => t.id !== this.openTrade.id);
-      this.swarm.recordTrade({ ...closedTrade, symbol: this.symbol });
-      console.log(`📊 ${this.symbol} Net:${netPnL >= 0 ? '+' : ''}$${netPnL.toFixed(2)} | Capital:$${this.engine.capital.toFixed(2)}`);
-      this.openTrade = null;
     } catch(e) {
-      console.error(`❌ ${this.symbol} forceClose: ${e.message}`);
-      this.openTrade = null;
+      console.error(`StrategyAgent error: ${e.message}`);
+      return { action: 'HOLD', q: 0, rsi: 50, direction: 'NONE', emaFast: 0, emaSlow: 0, momentum: 0 };
     }
   }
 
-  async syncPosition(price) {
-    try {
-      if (!this.openTrade) return;
-      const now = Date.now();
-      const tradeAge = now - this.openTrade.openTime;
-      const isLong = this.openTrade.direction === 'LONG';
-
-      const grossPnL = isLong
-        ? (price - this.openTrade.entry) * this.openTrade.qty
-        : (this.openTrade.entry - price) * this.openTrade.qty;
-      const grossPnLPct = grossPnL / (this.openTrade.entry * this.openTrade.qty) * 100;
-      const estFees = this.calcFees(this.openTrade.entry, price, this.openTrade.qty);
-      const estNet = grossPnL - estFees;
-
-      // ✅ PROFIT LOCK : dès +0.3% → trailing -0.1%
-      if (isLong) {
-        const pricePct = (price - this.openTrade.entry) / this.openTrade.entry;
-        if (pricePct >= this.PROFIT_LOCK_PCT) {
-          // Lock atteint → trailing SL serré
-          const newSL = parseFloat((price * (1 - this.PROFIT_TRAIL_PCT)).toFixed(2));
-          if (newSL > this.openTrade.sl) {
-            this.openTrade.sl = newSL;
-            this.openTrade.profitLocked = true;
-            console.log(`🔒 ${this.symbol} PROFIT LOCK +${(pricePct*100).toFixed(2)}% | SL serré → $${newSL.toFixed(2)}`);
-          }
-        }
-        // Trailing SL large si > +1%
-        if (grossPnLPct > 1.0 && price > (this.openTrade.highPrice || this.openTrade.entry)) {
-          this.openTrade.highPrice = price;
-          const newSL = parseFloat((price * 0.99).toFixed(2));
-          if (newSL > this.openTrade.sl) {
-            this.openTrade.sl = newSL;
-            console.log(`📈 ${this.symbol} TRAILING SL → $${newSL.toFixed(2)}`);
-          }
-        }
-      }
-
-      if (!isLong) {
-        const pricePct = (this.openTrade.entry - price) / this.openTrade.entry;
-        if (pricePct >= this.PROFIT_LOCK_PCT) {
-          const newSL = parseFloat((price * (1 + this.PROFIT_TRAIL_PCT)).toFixed(2));
-          if (newSL < this.openTrade.sl) {
-            this.openTrade.sl = newSL;
-            this.openTrade.profitLocked = true;
-            console.log(`🔒 ${this.symbol} SHORT PROFIT LOCK +${(pricePct*100).toFixed(2)}% | SL → $${newSL.toFixed(2)}`);
-          }
-        }
-        if (grossPnLPct > 1.0 && price < (this.openTrade.lowPrice || this.openTrade.entry)) {
-          this.openTrade.lowPrice = price;
-          const newSL = parseFloat((price * 1.01).toFixed(2));
-          if (newSL < this.openTrade.sl) {
-            this.openTrade.sl = newSL;
-            console.log(`📉 ${this.symbol} SHORT TRAILING SL → $${newSL.toFixed(2)}`);
-          }
-        }
-      }
-
-      // ✅ Timeout 2min → ferme si profit net > 0
-      if (tradeAge >= this.TRADE_TIMEOUT_MS) {
-        if (estNet > 0) {
-          await this.forceClose(price, `2min + profit net +$${estNet.toFixed(2)}`);
-        } else {
-          console.log(`⏳ ${this.symbol} 2min en perte ($${estNet.toFixed(2)}) | Attend SL/TP`);
-        }
-        return;
-      }
-
-      // Check Binance
-      const result = await this.engine.request('GET', '/fapi/v2/positionRisk', { symbol: this.symbol });
-      const positions = Array.isArray(result) ? result : [];
-      const active = positions.find(p => Math.abs(parseFloat(p.positionAmt)) > 0);
-      const currentAmt = active ? Math.abs(parseFloat(active.positionAmt)) : 0;
-
-      if (currentAmt === 0 && this.openTrade) {
-        let realGross = grossPnL;
-        try {
-          const income = await this.engine.request('GET', '/fapi/v1/income', {
-            symbol: this.symbol, incomeType: 'REALIZED_PNL', limit: 1
-          });
-          if (Array.isArray(income) && income.length > 0) realGross = parseFloat(income[0].income);
-        } catch(e) {}
-
-        const fees = this.calcFees(this.openTrade.entry, price, this.openTrade.qty);
-        const netPnL = realGross - fees;
-
-        const closedTrade = {
-          ...this.openTrade, exit: price, closeTime: Date.now(),
-          grossPnL: parseFloat(realGross.toFixed(4)),
-          fees, pnl: parseFloat(netPnL.toFixed(4)),
-          status: netPnL > 0 ? (isLong ? 'TP' : 'TP-SHORT') : (isLong ? 'SL' : 'SL-SHORT')
-        };
-
-        this.engine.closedTrades.push(closedTrade);
-        this.engine.totalFees += fees;
-        this.engine.capital += netPnL;
-        this.engine.openTrades = this.engine.openTrades.filter(t => t.id !== this.openTrade.id);
-        this.swarm.recordTrade({ ...closedTrade, symbol: this.symbol });
-        console.log(`📊 ${this.symbol} ${closedTrade.status} | Net:${netPnL >= 0 ? '+' : ''}$${netPnL.toFixed(2)} | Capital:$${this.engine.capital.toFixed(2)}`);
-        this.openTrade = null;
-      } else if (active) {
-        const unrealPnL = parseFloat(active.unRealizedProfit || 0);
-        const remaining = Math.max(0, this.TRADE_TIMEOUT_MS - tradeAge);
-        const lock = this.openTrade.profitLocked ? '🔒' : '';
-        console.log(`🔄 ${this.symbol} ${isLong ? '📈' : '📉'} ${lock} | Gross:${unrealPnL >= 0 ? '+' : ''}$${unrealPnL.toFixed(2)} | Net:${estNet >= 0 ? '+' : ''}$${estNet.toFixed(2)} | SL:$${this.openTrade.sl.toFixed(2)} | ${Math.floor(remaining/1000)}s`);
-      }
-    } catch(e) { console.error(`❌ ${this.symbol} sync: ${e.message}`); }
+  calcEMA(data, period) {
+    if (!data || data.length < period) return data[data.length - 1] || 0;
+    const k = 2 / (period + 1);
+    let ema = data.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    for (let i = period; i < data.length; i++) ema = data[i] * k + ema * (1 - k);
+    return ema;
   }
 
-  async placeOrder(price, sig, mtfScore) {
-    try {
-      const stake = this.engine.getStake();
-      const lev = sig.leverage || 7;
-      const tpPct = sig.tp || 0.020;
-      const slPct = sig.sl || 0.010;
-      const isLong = sig.direction === 'LONG';
-      const side = isLong ? 'BUY' : 'SELL';
-      const closeSide = isLong ? 'SELL' : 'BUY';
-
-      if (isLong) {
-        const bearAssets = this.engine.bots
-          .filter(b => b.symbol !== this.symbol)
-          .filter(b => b.mtf?.lastAnalysis?.bias === 'BEAR').length;
-        if (bearAssets >= 7) {
-          console.log(`⛔ ${this.symbol} LONG bloqué | Marché globalement baissier`);
-          return;
-        }
-      } else {
-        const bullAssets = this.engine.bots
-          .filter(b => b.symbol !== this.symbol)
-          .filter(b => b.mtf?.lastAnalysis?.bias === 'BULL').length;
-        if (bullAssets >= 7) {
-          console.log(`⛔ ${this.symbol} SHORT bloqué | Marché globalement haussier`);
-          return;
-        }
-      }
-
-      if (!this.swarm.isAssetHealthy(this.symbol)) {
-        console.log(`⛔ ${this.symbol} WR < 40% | SKIP`);
-        return;
-      }
-
-      await this.engine.request('POST', '/fapi/v1/leverage', { symbol: this.symbol, leverage: lev });
-
-      const qty = parseFloat((stake * lev / price).toFixed(this.precision));
-      if (qty < this.minQty) {
-        console.log(`⚠️  ${this.symbol}: qty ${qty} < min ${this.minQty}`);
-        return;
-      }
-
-      const order = await this.engine.request('POST', '/fapi/v1/order', {
-        symbol: this.symbol, side, type: 'MARKET', quantity: qty
-      });
-
-      if (order && order.orderId) {
-        const sl = isLong
-          ? parseFloat((price * (1 - slPct)).toFixed(2))
-          : parseFloat((price * (1 + slPct)).toFixed(2));
-        const tp = isLong
-          ? parseFloat((price * (1 + tpPct)).toFixed(2))
-          : parseFloat((price * (1 - tpPct)).toFixed(2));
-
-        await this.engine.request('POST', '/fapi/v1/order', {
-          symbol: this.symbol, side: closeSide, type: 'STOP_MARKET',
-          stopPrice: sl, closePosition: 'true'
-        });
-        await this.engine.request('POST', '/fapi/v1/order', {
-          symbol: this.symbol, side: closeSide, type: 'TAKE_PROFIT_MARKET',
-          stopPrice: tp, closePosition: 'true'
-        });
-
-        this.openTrade = {
-          id: order.orderId, symbol: this.symbol,
-          entry: price, qty, stake, sl, tp,
-          highPrice: isLong ? price : Infinity,
-          lowPrice: isLong ? 0 : price,
-          direction: sig.direction,
-          profitLocked: false,
-          openTime: Date.now(), leverage: lev,
-          mtfScore, q: sig.q, tpPct, slPct
-        };
-
-        this.lastOpenTime = Date.now();
-        this.engine.tradeCount++;
-        this.engine.openTrades.push(this.openTrade);
-        console.log(`✅ #${this.engine.tradeCount} ${isLong ? '📈LONG' : '📉SHORT'} ${this.symbol} | $${price} | Q:${sig.q.toFixed(0)} | Lev:${lev}x | TP:$${tp} | SL:$${sl} | Mise:$${stake}`);
-      } else {
-        console.error(`❌ ${this.symbol} rejeté: ${JSON.stringify(order)}`);
-      }
-    } catch(e) { console.error(`❌ ${this.symbol} placeOrder: ${e.message}`); }
-  }
-
-  async tick() {
-    const price = await this.fetchPrice();
-    if (price === 0) return;
-    this.currentPrice = price;
-    this.priceHistory.push(price);
-    if (this.priceHistory.length > 300) this.priceHistory.shift();
-
-    await this.syncPosition(price);
-
-    if (this.priceHistory.length < 50) {
-      console.log(`⏳ ${this.symbol} Init (${this.priceHistory.length}/50)`);
-      return;
+  calcRSI(data, period = 14) {
+    if (data.length < period + 1) return 50;
+    let gains = 0, losses = 0;
+    for (let i = data.length - period; i < data.length; i++) {
+      const diff = data[i] - data[i - 1];
+      if (diff > 0) gains += diff;
+      else losses += Math.abs(diff);
     }
-
-    const now = Date.now();
-    if (now - this.lastMTFTime >= this.MTF_REFRESH_MS) {
-      await this.mtf.analyze(price);
-      this.lastMTFTime = now;
-    }
-
-    const mtfScore = this.mtf.lastScore || 50;
-    const mtfBias = this.mtf.lastAnalysis?.bias || 'NEUTRAL';
-
-    const sig = this.swarm.coordinate(this.priceHistory, {
-      capital: this.engine.capital,
-      trades: this.engine.openTrades
-    });
-
-    const timeSinceLast = now - this.lastOpenTime;
-    const dirIcon = sig.direction === 'LONG' ? '📈' : sig.direction === 'SHORT' ? '📉' : '⏸️';
-
-    console.log(`💹 ${this.symbol}: $${price.toFixed(2)} | Q:${sig.q.toFixed(0)} | RSI:${(sig.rsi||50).toFixed(0)} | ${dirIcon}${sig.action} | Lev:${sig.leverage}x | MTF:${mtfScore.toFixed(0)}(${mtfBias}) | Pos:${this.openTrade ? this.openTrade.direction : '0'}`);
-
-    // ✅ Gap réduit à 4s pour plus de fréquence
-    if (
-      (sig.action === 'BUY' || sig.action === 'SELL') &&
-      sig.q >= 50 &&
-      !this.openTrade &&
-      timeSinceLast >= 4000 &&
-      this.engine.config.apiKey
-    ) {
-      await this.placeOrder(price, sig, mtfScore);
-    }
+    const avgGain = gains / period;
+    const avgLoss = losses / period;
+    if (avgLoss === 0) return 100;
+    return 100 - (100 / (1 + avgGain / avgLoss));
   }
 }
 
-class TradingEngine {
-  constructor(config = {}) {
-    this.config = {
-      apiKey: process.env.BINANCE_API_KEY || '',
-      apiSecret: process.env.BINANCE_API_SECRET || '',
-      capital: parseInt(process.env.CAPITAL) || 2000,
-      tickMs: 2000,
-      ...config
-    };
-    this.bots = SYMBOLS.map(s => new SymbolBot(s, this));
-    this.openTrades = [];
-    this.closedTrades = [];
-    this.capital = this.config.capital;
-    this.startCapital = this.config.capital;
-    this.totalFees = 0;
-    this.running = false;
-    this.tradeCount = 0;
-
-    this.profitTakingConfig = {
-      10000: { toSave: 2000, newCapital: 8000,  done: false },
-      20000: { toSave: 2000, newCapital: 18000, done: false },
-      30000: { toSave: 2000, newCapital: 28000, done: false },
-      50000: { toSave: 8000, newCapital: 42000, done: false }
-    };
-    this.pendingProfitTaking = null;
-    console.log(`⚙️  TradingEngine v8.0 | ${SYMBOLS.length} assets | Capital: $${this.capital}`);
-  }
-
-  sign(params) {
-    const query = Object.entries(params).map(([k, v]) => `${k}=${v}`).join('&');
-    const sig = crypto.createHmac('sha256', this.config.apiSecret).update(query).digest('hex');
-    return `${query}&signature=${sig}`;
-  }
-
-  async request(method, path, params = {}) {
-    params.timestamp = Date.now();
-    params.recvWindow = 5000;
-    const query = this.sign(params);
-    return new Promise((resolve, reject) => {
-      const options = {
-        hostname: BASE_URL,
-        path: method === 'GET' ? `${path}?${query}` : path,
-        method,
-        headers: {
-          'X-MBX-APIKEY': this.config.apiKey,
-          'Content-Type': 'application/x-www-form-urlencoded'
-        }
-      };
-      const req = https.request(options, res => {
-        let body = '';
-        res.on('data', c => body += c);
-        res.on('end', () => { try { resolve(JSON.parse(body)); } catch(e) { reject(e); } });
-      });
-      req.on('error', reject);
-      if (method !== 'GET') req.write(query);
-      req.end();
-    });
-  }
-
-  getStake() {
-    const cap = this.capital;
-    let base = 195, special = 325;
-    if (cap >= 80000)      { base = 8500;  special = 14000; }
-    else if (cap >= 40000) { base = 4500;  special = 7500;  }
-    else if (cap >= 20000) { base = 2500;  special = 4200;  }
-    else if (cap >= 12000) { base = 1400;  special = 2300;  }
-    else if (cap >= 8000)  { base = 750;   special = 1250;  }
-    else if (cap >= 4000)  { base = 390;   special = 650;   }
-    else                   { base = 195;   special = 325;   }
-    if (this.tradeCount > 0 && this.tradeCount % 10 === 0) {
-      console.log(`💥 TRADE SPÉCIAL (1/10) | Mise: $${special}`);
-      return special;
+class RiskAgent {
+  validate(signal, portfolio) {
+    if (!signal || !portfolio) {
+      return { approved: false, leverage: 7, tp: 0.020, sl: 0.010, direction: 'NONE' };
     }
-    return base;
+    let leverage = 7;
+    if (signal.q >= 80) leverage = 12;
+    else if (signal.q >= 55) leverage = 7;
+    else leverage = 3;
+
+    let tp = 0.020;
+    if (signal.q >= 80) tp = 0.025;
+    else if (signal.q >= 55) tp = 0.020;
+    else tp = 0.015;
+
+    const approved = (signal.action === 'BUY' || signal.action === 'SELL') && signal.q >= 50;
+    return { approved, leverage, tp, sl: 0.010, direction: signal.direction };
+  }
+}
+
+class LearningAgent {
+  constructor() {
+    this.totalTrades = 0;
+    this.wins = 0;
+    this.losses = 0;
+    this.assetStats = {};
   }
 
-  checkProfitTaking() {
-    if (this.pendingProfitTaking) return;
-    for (const [threshold, cfg] of Object.entries(this.profitTakingConfig)) {
-      const t = parseInt(threshold);
-      if (this.capital >= t && !cfg.done) {
-        cfg.done = true;
-        this.pendingProfitTaking = { threshold: t, toSave: cfg.toSave, newCapital: cfg.newCapital };
-        console.log(`🎯 PROFIT TAKING | $${this.capital.toFixed(0)} >= $${t} | Sauvegarder $${cfg.toSave}?`);
-        break;
-      }
+  learn(tradeOutcome) {
+    if (!tradeOutcome) return;
+    this.totalTrades++;
+    if (tradeOutcome.pnl > 0) this.wins++;
+    else this.losses++;
+    const sym = tradeOutcome.symbol || 'UNKNOWN';
+    if (!this.assetStats[sym]) this.assetStats[sym] = { trades: 0, wins: 0, pnl: 0 };
+    this.assetStats[sym].trades++;
+    if (tradeOutcome.pnl > 0) this.assetStats[sym].wins++;
+    this.assetStats[sym].pnl += tradeOutcome.pnl;
+  }
+
+  isAssetHealthy(symbol) {
+    const stats = this.assetStats[symbol];
+    if (!stats || stats.trades < 10) return true;
+    const wr = stats.wins / stats.trades;
+    if (wr < 0.40) {
+      console.log(`⛔ ${symbol}: WR ${(wr*100).toFixed(1)}% < 40% → PAUSE`);
+      return false;
     }
-  }
-
-  acceptProfitTaking() {
-    if (!this.pendingProfitTaking) return false;
-    const { toSave, newCapital } = this.pendingProfitTaking;
-    console.log(`💾 $${toSave} SAUVEGARDÉS | Capital: $${this.capital.toFixed(2)} → $${newCapital}`);
-    this.capital = newCapital;
-    this.pendingProfitTaking = null;
     return true;
-  }
-
-  rejectProfitTaking() {
-    if (!this.pendingProfitTaking) return false;
-    console.log(`❌ Profit taking refusé | Capital: $${this.capital.toFixed(2)}`);
-    this.pendingProfitTaking = null;
-    return true;
-  }
-
-  async tick() {
-    await Promise.all(this.bots.map(bot => bot.tick()));
-    this.checkProfitTaking();
-  }
-
-  async start() {
-    if (this.running) return;
-    this.running = true;
-    console.log(`🚀 BOT v8.0 | ${SYMBOLS.length} assets | Capital:$${this.capital}`);
-    console.log(`🎯 LONG+SHORT | Profit Lock +0.3% | Trailing -0.1% | Gap:4s | Timeout:2min`);
-    console.log(`📊 Assets: ${SYMBOLS.map(s => s.symbol).join(', ')}`);
-    while (this.running) {
-      try { await this.tick(); }
-      catch(e) { console.error(`❌ Tick: ${e.message}`); }
-      await new Promise(r => setTimeout(r, this.config.tickMs));
-    }
-  }
-
-  stop() {
-    this.running = false;
-    const netPnL = this.closedTrades.reduce((s, t) => s + t.pnl, 0);
-    const grossPnL = this.closedTrades.reduce((s, t) => s + (t.grossPnL || t.pnl), 0);
-    console.log(`⏸️  BOT STOPPÉ | Capital:$${this.capital.toFixed(2)} | Gross:${grossPnL >= 0 ? '+' : ''}$${grossPnL.toFixed(2)} | Fees:-$${this.totalFees.toFixed(2)} | NET:${netPnL >= 0 ? '+' : ''}$${netPnL.toFixed(2)}`);
   }
 
   getStats() {
-    const totalTrades = this.closedTrades.length;
-    const winTrades = this.closedTrades.filter(t => t.pnl > 0).length;
-    const lossTrades = this.closedTrades.filter(t => t.pnl < 0).length;
-    const longTrades = this.closedTrades.filter(t => t.direction === 'LONG').length;
-    const shortTrades = this.closedTrades.filter(t => t.direction === 'SHORT').length;
-    const grossPnL = this.closedTrades.reduce((s, t) => s + (t.grossPnL || t.pnl), 0);
-    const netPnL = this.closedTrades.reduce((s, t) => s + t.pnl, 0);
-    const winRate = totalTrades > 0 ? (winTrades / totalTrades * 100).toFixed(1) : 0;
-    const currentPrices = {};
-    this.bots.forEach(b => { currentPrices[b.symbol] = b.currentPrice || 0; });
-    const mtfScores = {};
-    this.bots.forEach(b => {
-      mtfScores[b.symbol] = {
-        score: b.mtf.lastScore || 0,
-        bias: b.mtf.lastAnalysis?.bias || 'NEUTRAL',
-        trends: b.mtf.lastAnalysis?.trends || {}
-      };
-    });
-    return {
-      openTrades: this.openTrades.length,
-      closedTrades: totalTrades,
-      winTrades, lossTrades, longTrades, shortTrades,
-      grossPnL: parseFloat(grossPnL.toFixed(2)),
-      totalFees: parseFloat(this.totalFees.toFixed(2)),
-      totalPnL: parseFloat(netPnL.toFixed(2)),
-      winRate: parseFloat(winRate),
-      capital: parseFloat(this.capital.toFixed(2)),
-      startCapital: this.startCapital,
-      netRoi: ((netPnL / this.startCapital) * 100).toFixed(2),
-      running: this.running,
-      currentStake: this.getStake(),
-      tradeCount: this.tradeCount,
-      mode: 'BOT v8.0 — 10 ASSETS',
-      currentPrices, mtfScores,
-      pendingProfitTaking: this.pendingProfitTaking
-    };
+    const winRate = this.totalTrades > 0 ? (this.wins / this.totalTrades * 100).toFixed(1) : 0;
+    return { totalTrades: this.totalTrades, wins: this.wins, losses: this.losses, winRate: parseFloat(winRate), assetStats: this.assetStats };
   }
 }
 
-module.exports = TradingEngine;
+class TradingSwarm {
+  constructor() {
+    this.strategy = new StrategyAgent();
+    this.risk = new RiskAgent();
+    this.learning = new LearningAgent();
+    this.lastLeverage = 7;
+    this.lastTP = 0.020;
+    this.lastSL = 0.010;
+    this.lastDirection = 'NONE';
+  }
+
+  coordinate(priceData, portfolio) {
+    const sig = this.strategy.analyze(priceData);
+    const risk = this.risk.validate(sig, portfolio);
+    this.lastLeverage = risk.leverage;
+    this.lastTP = risk.tp;
+    this.lastSL = risk.sl;
+    this.lastDirection = risk.direction;
+    return {
+      action: risk.approved ? sig.action : 'HOLD',
+      direction: risk.direction,
+      q: sig.q, rsi: sig.rsi,
+      leverage: risk.leverage, tp: risk.tp, sl: risk.sl,
+      emaFast: sig.emaFast, emaSlow: sig.emaSlow,
+      momentum: sig.momentum, ma20: sig.ma20
+    };
+  }
+
+  isAssetHealthy(symbol) { return this.learning.isAssetHealthy(symbol); }
+  recordTrade(tradeOutcome) { this.learning.learn(tradeOutcome); }
+  getStats() { return this.learning.getStats(); }
+}
+
+module.exports = { StrategyAgent, RiskAgent, LearningAgent, TradingSwarm };
