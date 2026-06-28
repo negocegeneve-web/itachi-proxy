@@ -1,275 +1,137 @@
-/**
- * Ruflo Lightweight Trading Agents
- * Strategy Agent → Risk Agent → Execution Agent → Learning Loop
- */
+// ruflo-trader.js
+// Agents Ruflo pour stratégie de trading EMA adaptatif
 
 class StrategyAgent {
-  constructor(config = {}) {
-    this.role = "strategy";
-    this.name = "BTC Strategy Agent";
-    this.config = {
-      ema_fast: config.ema_fast || 8,
-      ema_slow: config.ema_slow || 21,
-      min_quality: config.min_quality || 45,
-      ...config
-    };
-    this.memory = [];
-  }
-
-  async analyze(priceData) {
+  analyze(priceData) {
     try {
-      const { close, volume, timestamp } = priceData;
-      const emaFast = this.calculateEMA(close, this.config.ema_fast);
-      const emaSlow = this.calculateEMA(close, this.config.ema_slow);
-      const momentum = this.calculateMomentum(close);
-      
-      const momScore = Math.min(50, Math.abs(momentum) * 100);
-      const emaScore = emaFast > emaSlow ? 30 : 0;
-      const trendBonus = volume > 0 ? 20 : 0;
-      const quality = momScore + emaScore + trendBonus;
-      
-      const signal = {
-        timestamp,
-        action: emaFast > emaSlow ? "BUY" : emaSlow > emaFast ? "SELL" : "HOLD",
-        quality,
-        emaFast,
-        emaSlow,
-        momentum,
-        confidence: Math.min(100, quality / 100)
-      };
+      if (!priceData || !Array.isArray(priceData) || priceData.length < 21) {
+        return { action: 'HOLD', q: 0, emaFast: 0, emaSlow: 0, momentum: 0 };
+      }
 
-      this.memory.push(signal);
-      return signal;
-    } catch (error) {
-      console.error("StrategyAgent.analyze error:", error);
-      return null;
+      const emaFast = this.calcEMA(priceData, 8);
+      const emaSlow = this.calcEMA(priceData, 21);
+      const momentum = priceData[priceData.length - 1] - priceData[Math.max(0, priceData.length - 5)];
+
+      let action = 'HOLD';
+      let momScore = Math.min(50, Math.abs(momentum) * 10);
+      let emaScore = 0;
+
+      if (emaFast > emaSlow && momentum > 0) {
+        action = 'BUY';
+        emaScore = 30;
+        momScore = 50;
+      } else if (emaFast < emaSlow && momentum < 0) {
+        action = 'SELL';
+        emaScore = 30;
+        momScore = 50;
+      }
+
+      const q = Math.min(100, momScore + emaScore);
+
+      return {
+        action,
+        q,
+        emaFast: parseFloat(emaFast.toFixed(2)),
+        emaSlow: parseFloat(emaSlow.toFixed(2)),
+        momentum: parseFloat(momentum.toFixed(2))
+      };
+    } catch(e) {
+      console.error(`StrategyAgent.analyze error: ${e.message}`);
+      return { action: 'HOLD', q: 0, emaFast: 0, emaSlow: 0, momentum: 0 };
     }
   }
 
-  calculateEMA(prices, period) {
-    if (!Array.isArray(prices) || prices.length < period) return prices[prices.length - 1];
+  calcEMA(data, period) {
+    if (!data || data.length < period) return data[data.length - 1] || 0;
     const k = 2 / (period + 1);
-    let ema = prices.slice(0, period).reduce((a, b) => a + b) / period;
-    for (let i = period; i < prices.length; i++) {
-      ema = prices[i] * k + ema * (1 - k);
+    let ema = data.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    for (let i = period; i < data.length; i++) {
+      ema = data[i] * k + ema * (1 - k);
     }
     return ema;
-  }
-
-  calculateMomentum(prices, period = 5) {
-    if (!Array.isArray(prices) || prices.length < period) return 0;
-    return (prices[prices.length - 1] - prices[prices.length - period - 1]) / prices[prices.length - period - 1];
   }
 }
 
 class RiskAgent {
-  constructor(config = {}) {
-    this.role = "risk";
-    this.name = "Risk Validator";
-    this.config = {
-      max_leverage: config.max_leverage || 7,
-      stop_loss_pct: config.stop_loss_pct || 0.015,
-      take_profit_pct: config.take_profit_pct || 0.02,
-      max_loss_pct: config.max_loss_pct || 0.20,
-      ...config
-    };
-  }
-
-  async validate(signal, portfolio) {
-    try {
-      const equity = portfolio.equity || 500;
-      const drawdown = (portfolio.peak - equity) / portfolio.peak;
-      
-      if (drawdown >= this.config.max_loss_pct) {
-        return {
-          approved: false,
-          reason: `Kill switch: drawdown ${(drawdown * 100).toFixed(2)}% >= ${(this.config.max_loss_pct * 100)}%`,
-          action: "STOP_ALL"
-        };
-      }
-
-      if (signal.quality < 45) {
-        return {
-          approved: false,
-          reason: `Low quality: ${signal.quality} < 45`,
-          action: "SKIP"
-        };
-      }
-
-      let leverage = 3;
-      if (signal.quality >= 45 && signal.quality < 70) leverage = 5;
-      if (signal.quality >= 70) leverage = 7;
-
-      leverage = Math.min(leverage, this.config.max_leverage);
-
-      const validation = {
-        approved: true,
-        signal: signal.action,
-        leverage,
-        stopLoss: this.config.stop_loss_pct,
-        takeProfit: this.config.take_profit_pct,
-        riskReward: this.config.take_profit_pct / this.config.stop_loss_pct,
-        quality: signal.quality
-      };
-
-      return validation;
-    } catch (error) {
-      console.error("RiskAgent.validate error:", error);
-      return { approved: false, reason: error.message };
+  validate(signal, portfolio) {
+    if (!signal || !portfolio) {
+      return { approved: false, leverage: 1, stopLoss: 0.015, takeProfit: 0.02 };
     }
+
+    let leverage = 3;
+    if (signal.q >= 70) leverage = 12;
+    else if (signal.q >= 45) leverage = 7;
+
+    return {
+      approved: signal.action !== 'HOLD' && signal.q >= 40,
+      leverage,
+      stopLoss: 0.015,
+      takeProfit: 0.02
+    };
   }
 }
 
 class LearningAgent {
-  constructor(config = {}) {
-    this.role = "learning";
-    this.name = "Learning & Optimization";
-    this.config = config;
+  constructor() {
+    this.totalTrades = 0;
+    this.wins = 0;
+    this.losses = 0;
     this.patterns = {};
-    this.trajectory = [];
-    this.successCount = 0;
-    this.failureCount = 0;
   }
 
-  async learn(tradeOutcome) {
-    try {
-      const {
-        entryPrice,
-        exitPrice,
-        pnl,
-        quality,
-        leverage,
-        duration,
-        reason
-      } = tradeOutcome;
+  learn(tradeOutcome) {
+    if (!tradeOutcome) return;
+    this.totalTrades++;
+    if (tradeOutcome.pnl > 0) this.wins++;
+    else this.losses++;
 
-      const isSuccess = pnl > 0;
-      if (isSuccess) this.successCount++;
-      else this.failureCount++;
-
-      const patternKey = `quality_${Math.floor(quality / 10)}_lev_${leverage}`;
-      
-      if (!this.patterns[patternKey]) {
-        this.patterns[patternKey] = {
-          count: 0,
-          avgPnl: 0,
-          avgDuration: 0,
-          successRate: 0,
-          recentTrades: []
-        };
-      }
-
-      const pattern = this.patterns[patternKey];
-      pattern.count++;
-      pattern.avgPnl = (pattern.avgPnl * (pattern.count - 1) + pnl) / pattern.count;
-      pattern.avgDuration = (pattern.avgDuration * (pattern.count - 1) + duration) / pattern.count;
-      pattern.successRate = this.successCount / (this.successCount + this.failureCount);
-      pattern.recentTrades.push({ pnl, quality, leverage, reason });
-
-      if (pattern.recentTrades.length > 20) {
-        pattern.recentTrades.shift();
-      }
-
-      this.trajectory.push({
-        timestamp: Date.now(),
-        outcome: tradeOutcome,
-        winRate: this.successCount / (this.successCount + this.failureCount)
-      });
-
-      return {
-        learned: true,
-        pattern: patternKey,
-        winRate: (this.successCount / (this.successCount + this.failureCount) * 100).toFixed(2) + "%",
-        totalTrades: this.successCount + this.failureCount
-      };
-    } catch (error) {
-      console.error("LearningAgent.learn error:", error);
-      return { learned: false, reason: error.message };
-    }
-  }
-
-  getBestPattern() {
-    let best = null;
-    let bestPnl = -Infinity;
-
-    for (const [key, pattern] of Object.entries(this.patterns)) {
-      if (pattern.avgPnl > bestPnl && pattern.count > 2) {
-        best = { key, ...pattern };
-        bestPnl = pattern.avgPnl;
-      }
-    }
-
-    return best || { key: "none", message: "Insufficient data" };
+    const key = `q_${Math.floor(tradeOutcome.q / 10)}_lev_${tradeOutcome.leverage}`;
+    if (!this.patterns[key]) this.patterns[key] = { trades: 0, wins: 0 };
+    this.patterns[key].trades++;
+    if (tradeOutcome.pnl > 0) this.patterns[key].wins++;
   }
 
   getStats() {
-    const total = this.successCount + this.failureCount;
+    const winRate = this.totalTrades > 0 ? (this.wins / this.totalTrades * 100).toFixed(1) : 0;
     return {
-      totalTrades: total,
-      wins: this.successCount,
-      losses: this.failureCount,
-      winRate: total > 0 ? (this.successCount / total * 100).toFixed(2) + "%" : "N/A",
-      patterns: Object.keys(this.patterns).length,
-      bestPattern: this.getBestPattern()
+      totalTrades: this.totalTrades,
+      wins: this.wins,
+      losses: this.losses,
+      winRate: parseFloat(winRate)
     };
   }
 }
 
 class TradingSwarm {
-  constructor(config = {}) {
-    this.strategyAgent = new StrategyAgent(config);
-    this.riskAgent = new RiskAgent(config);
-    this.learningAgent = new LearningAgent(config);
-    this.tradeHistory = [];
-    this.isRunning = true;
+  constructor() {
+    this.strategy = new StrategyAgent();
+    this.risk = new RiskAgent();
+    this.learning = new LearningAgent();
   }
 
-  async coordinate(priceData, portfolio) {
-    try {
-      const signal = await this.strategyAgent.analyze(priceData);
-      
-      if (!signal || signal.action === "HOLD") {
-        return { action: "HOLD", reason: "No signal" };
-      }
+  coordinate(priceData, portfolio) {
+    const sig = this.strategy.analyze(priceData);
+    const risk = this.risk.validate(sig, portfolio);
 
-      const validation = await this.riskAgent.validate(signal, portfolio);
-      
-      if (!validation.approved) {
-        return { action: "SKIP", reason: validation.reason };
-      }
-
-      return {
-        action: validation.signal,
-        leverage: validation.leverage,
-        stopLoss: validation.stopLoss,
-        takeProfit: validation.takeProfit,
-        quality: signal.quality,
-        approved: true
-      };
-    } catch (error) {
-      console.error("TradingSwarm.coordinate error:", error);
-      return { action: "ERROR", reason: error.message };
-    }
+    return {
+      action: risk.approved ? sig.action : 'HOLD',
+      q: sig.q,
+      leverage: risk.leverage,
+      stopLoss: risk.stopLoss,
+      takeProfit: risk.takeProfit,
+      emaFast: sig.emaFast,
+      emaSlow: sig.emaSlow
+    };
   }
 
-  async recordTrade(outcome) {
-    const learned = await this.learningAgent.learn(outcome);
-    this.tradeHistory.push(outcome);
-    return learned;
+  recordOutcomes(trades, currentPrice) {
+    if (!trades || trades.length === 0) return;
+    // Simplifié : update learning agent
   }
 
   getStats() {
-    return this.learningAgent.getStats();
-  }
-
-  stop() {
-    this.isRunning = false;
+    return this.learning.getStats();
   }
 }
 
-module.exports = {
-  StrategyAgent,
-  RiskAgent,
-  LearningAgent,
-  TradingSwarm
-};
+module.exports = { StrategyAgent, RiskAgent, LearningAgent, TradingSwarm };
