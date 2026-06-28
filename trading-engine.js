@@ -28,7 +28,7 @@ class SymbolBot {
     this.lastOpenTime = 0;
     this.lastMTFTime = 0;
     this.MTF_REFRESH_MS = 60000;
-    this.TRADE_TIMEOUT_MS = 120000;
+    this.TRADE_TIMEOUT_MS = 180000; // ✅ 3min timeout (TP 2% prend plus de temps)
     console.log(`⚙️  SymbolBot | ${this.symbol}`);
   }
 
@@ -57,18 +57,21 @@ class SymbolBot {
       const grossPnL = (price - this.openTrade.entry) * this.openTrade.qty;
       const fees = this.calcFees(this.openTrade.entry, price, this.openTrade.qty);
       const netPnL = grossPnL - fees;
-      console.log(`⏱️  ${this.symbol} FORCE CLOSE | ${reason} | Net:$${netPnL.toFixed(2)}`);
+      console.log(`⏱️  ${this.symbol} FORCE CLOSE | ${reason} | Net:${netPnL >= 0 ? '+' : ''}$${netPnL.toFixed(2)}`);
+
       await this.engine.request('DELETE', '/fapi/v1/allOpenOrders', { symbol: this.symbol });
       await this.engine.request('POST', '/fapi/v1/order', {
         symbol: this.symbol, side: 'SELL', type: 'MARKET',
         quantity: this.openTrade.qty, reduceOnly: 'true'
       });
+
       const closedTrade = {
         ...this.openTrade, exit: price, closeTime: Date.now(),
         grossPnL: parseFloat(grossPnL.toFixed(4)),
         fees, pnl: parseFloat(netPnL.toFixed(4)),
         status: netPnL > 0 ? 'TIMEOUT+' : 'TIMEOUT-'
       };
+
       this.engine.closedTrades.push(closedTrade);
       this.engine.totalFees += fees;
       this.engine.capital += netPnL;
@@ -90,22 +93,24 @@ class SymbolBot {
       const grossPnL = (price - this.openTrade.entry) * this.openTrade.qty;
       const grossPnLPct = (price - this.openTrade.entry) / this.openTrade.entry * 100;
 
-      // Trailing SL
-      if (grossPnLPct > 0.5 && price > (this.openTrade.highPrice || this.openTrade.entry)) {
+      // ✅ Trailing SL : accroche si profit > 1%
+      if (grossPnLPct > 1.0 && price > (this.openTrade.highPrice || this.openTrade.entry)) {
         this.openTrade.highPrice = price;
         const newSL = parseFloat((price * 0.99).toFixed(2));
         if (newSL > this.openTrade.sl) {
           this.openTrade.sl = newSL;
-          console.log(`📈 ${this.symbol} TRAILING SL → $${newSL.toFixed(2)}`);
+          console.log(`📈 ${this.symbol} TRAILING SL → $${newSL.toFixed(2)} (+1% protégé)`);
         }
       }
 
-      // Timeout seulement en bénéfice
+      // ✅ Timeout SEULEMENT si en bénéfice net (après fees estimées)
       if (tradeAge >= this.TRADE_TIMEOUT_MS) {
-        if (grossPnLPct > 0) {
-          await this.forceClose(price, `2min + profit +${grossPnLPct.toFixed(2)}%`);
+        const estimatedFees = this.calcFees(this.openTrade.entry, price, this.openTrade.qty);
+        const estimatedNet = grossPnL - estimatedFees;
+        if (estimatedNet > 0) {
+          await this.forceClose(price, `3min + profit net +$${estimatedNet.toFixed(2)}`);
         } else {
-          console.log(`⏳ ${this.symbol} Timeout en perte (${grossPnLPct.toFixed(2)}%) | Attend SL/TP`);
+          console.log(`⏳ ${this.symbol} 3min écoulées mais perte nette ($${estimatedNet.toFixed(2)}) | Attend SL/TP`);
         }
         return;
       }
@@ -123,14 +128,17 @@ class SymbolBot {
           });
           if (Array.isArray(income) && income.length > 0) realGross = parseFloat(income[0].income);
         } catch(e) {}
+
         const fees = this.calcFees(this.openTrade.entry, price, this.openTrade.qty);
         const netPnL = realGross - fees;
+
         const closedTrade = {
           ...this.openTrade, exit: price, closeTime: Date.now(),
           grossPnL: parseFloat(realGross.toFixed(4)),
           fees, pnl: parseFloat(netPnL.toFixed(4)),
           status: netPnL > 0 ? 'TP' : 'SL'
         };
+
         this.engine.closedTrades.push(closedTrade);
         this.engine.totalFees += fees;
         this.engine.capital += netPnL;
@@ -141,7 +149,9 @@ class SymbolBot {
       } else if (active) {
         const unrealPnL = parseFloat(active.unRealizedProfit || 0);
         const remaining = Math.max(0, this.TRADE_TIMEOUT_MS - tradeAge);
-        console.log(`🔄 ${this.symbol} | PnL:${unrealPnL >= 0 ? '+' : ''}$${unrealPnL.toFixed(2)} | SL:$${this.openTrade.sl.toFixed(2)} | ${Math.floor(remaining/1000)}s`);
+        const estFees = this.calcFees(this.openTrade.entry, price, this.openTrade.qty);
+        const estNet = unrealPnL - estFees;
+        console.log(`🔄 ${this.symbol} | Gross:${unrealPnL >= 0 ? '+' : ''}$${unrealPnL.toFixed(2)} | Fees:-$${estFees.toFixed(2)} | Net:${estNet >= 0 ? '+' : ''}$${estNet.toFixed(2)} | SL:$${this.openTrade.sl.toFixed(2)} | ${Math.floor(remaining/1000)}s`);
       }
     } catch(e) { console.error(`❌ ${this.symbol} sync: ${e.message}`); }
   }
@@ -150,10 +160,10 @@ class SymbolBot {
     try {
       const stake = this.engine.getStake();
       const lev = sig.leverage || 7;
-      const tpPct = sig.tp || 0.010;
+      const tpPct = sig.tp || 0.020;
       const slPct = sig.sl || 0.010;
 
-      // Anti trades contradictoires
+      // ✅ Anti corrélation baissière
       const bearAssets = this.engine.bots
         .filter(b => b.symbol !== this.symbol)
         .filter(b => b.mtf?.lastAnalysis?.bias === 'BEAR').length;
@@ -162,8 +172,9 @@ class SymbolBot {
         return;
       }
 
+      // ✅ Asset health check
       if (!this.swarm.isAssetHealthy(this.symbol)) {
-        console.log(`⛔ ${this.symbol} WR < 35% | SKIP`);
+        console.log(`⛔ ${this.symbol} WR < 40% | SKIP`);
         return;
       }
 
@@ -203,7 +214,7 @@ class SymbolBot {
         this.lastOpenTime = Date.now();
         this.engine.tradeCount++;
         this.engine.openTrades.push(this.openTrade);
-        console.log(`✅ #${this.engine.tradeCount} ${this.symbol} | $${price} | Q:${sig.q.toFixed(0)} | Lev:${lev}x | TP:+${(tpPct*100).toFixed(1)}% | SL:-${(slPct*100).toFixed(1)}% | Mise:$${stake}`);
+        console.log(`✅ #${this.engine.tradeCount} ${this.symbol} | $${price} | Q:${sig.q.toFixed(0)} | Lev:${lev}x | TP:+${(tpPct*100).toFixed(1)}%($${tp}) | SL:-${(slPct*100).toFixed(1)}%($${sl}) | Mise:$${stake}`);
       } else {
         console.error(`❌ ${this.symbol} rejeté: ${JSON.stringify(order)}`);
       }
@@ -219,8 +230,8 @@ class SymbolBot {
 
     await this.syncPosition(price);
 
-    if (this.priceHistory.length < 30) {
-      console.log(`⏳ ${this.symbol} Init (${this.priceHistory.length}/30)`);
+    if (this.priceHistory.length < 50) {
+      console.log(`⏳ ${this.symbol} Init (${this.priceHistory.length}/50)`);
       return;
     }
 
@@ -232,18 +243,25 @@ class SymbolBot {
 
     const mtfScore = this.mtf.lastScore || 50;
     const mtfBias = this.mtf.lastAnalysis?.bias || 'NEUTRAL';
+
     const sig = this.swarm.coordinate(this.priceHistory, {
       capital: this.engine.capital,
       trades: this.engine.openTrades
     });
+
     const timeSinceLast = now - this.lastOpenTime;
 
-    console.log(`💹 ${this.symbol}: $${price.toFixed(2)} | Q:${sig.q.toFixed(0)} | RSI:${(sig.rsi||50).toFixed(0)} | ${sig.action} | Lev:${sig.leverage}x | MTF:${mtfScore.toFixed(0)}(${mtfBias}) | Pos:${this.openTrade ? '1' : '0'}`);
+    // ✅ Filtre MA20 : prix doit être au-dessus de la moyenne
+    const ma20 = this.priceHistory.slice(-20).reduce((a,b) => a+b, 0) / 20;
+    const aboveMA20 = price > ma20;
 
-    // ✅ Fréquence maximale : Q >= 25, MTF pas BEAR, gap 6s
+    console.log(`💹 ${this.symbol}: $${price.toFixed(2)} | Q:${sig.q.toFixed(0)} | RSI:${(sig.rsi||50).toFixed(0)} | ${sig.action} | Lev:${sig.leverage}x | MA20:${aboveMA20 ? '✅' : '❌'} | MTF:${mtfScore.toFixed(0)}(${mtfBias}) | Pos:${this.openTrade ? '1' : '0'}`);
+
+    // ✅ CONDITIONS OUVERTURE STRICTES
     if (
       sig.action === 'BUY' &&
-      sig.q >= 25 &&
+      sig.q >= 50 &&
+      aboveMA20 &&
       mtfBias !== 'BEAR' &&
       !this.openTrade &&
       timeSinceLast >= 6000 &&
@@ -278,7 +296,7 @@ class TradingEngine {
       20000: { toSave: 3000, newCapital: 17000, done: false }
     };
     this.pendingProfitTaking = null;
-    console.log(`⚙️  TradingEngine v6.0 | ${SYMBOLS.length} assets | Capital: $${this.capital}`);
+    console.log(`⚙️  TradingEngine v6.1 | ${SYMBOLS.length} assets | Capital: $${this.capital}`);
   }
 
   sign(params) {
@@ -296,7 +314,10 @@ class TradingEngine {
         hostname: BASE_URL,
         path: method === 'GET' ? `${path}?${query}` : path,
         method,
-        headers: { 'X-MBX-APIKEY': this.config.apiKey, 'Content-Type': 'application/x-www-form-urlencoded' }
+        headers: {
+          'X-MBX-APIKEY': this.config.apiKey,
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
       };
       const req = https.request(options, res => {
         let body = '';
@@ -363,8 +384,8 @@ class TradingEngine {
   async start() {
     if (this.running) return;
     this.running = true;
-    console.log(`🚀 MULTI-BOT v6.0 | ${SYMBOLS.length} assets | Capital:$${this.capital}`);
-    console.log(`🎯 Q>=25 | MTF bias | TP adaptatif | SL:-1% trailing | Lev:3/7/12x`);
+    console.log(`🚀 MULTI-BOT v6.1 | ${SYMBOLS.length} assets | Capital:$${this.capital}`);
+    console.log(`🎯 Q>=50 | MA20 filter | TP:+2/2.5% | SL:-1% trailing | Lev:3/7/12x | Fees auto-calculés`);
     while (this.running) {
       try { await this.tick(); }
       catch(e) { console.error(`❌ Tick: ${e.message}`); }
@@ -376,7 +397,12 @@ class TradingEngine {
     this.running = false;
     const netPnL = this.closedTrades.reduce((s, t) => s + t.pnl, 0);
     const grossPnL = this.closedTrades.reduce((s, t) => s + (t.grossPnL || t.pnl), 0);
-    console.log(`⏸️  BOT STOPPÉ | Capital:$${this.capital.toFixed(2)} | Gross:$${grossPnL.toFixed(2)} | Fees:$${this.totalFees.toFixed(2)} | NET:$${netPnL.toFixed(2)} | ROI:${((netPnL/this.startCapital)*100).toFixed(2)}%`);
+    console.log(`⏸️  BOT STOPPÉ`);
+    console.log(`💰 Capital final: $${this.capital.toFixed(2)}`);
+    console.log(`📊 Gross PnL: +$${grossPnL.toFixed(2)}`);
+    console.log(`💸 Total Fees: -$${this.totalFees.toFixed(2)}`);
+    console.log(`✅ NET PnL: ${netPnL >= 0 ? '+' : ''}$${netPnL.toFixed(2)}`);
+    console.log(`📈 ROI NET: ${((netPnL/this.startCapital)*100).toFixed(2)}%`);
   }
 
   getStats() {
@@ -410,7 +436,7 @@ class TradingEngine {
       running: this.running,
       currentStake: this.getStake(),
       tradeCount: this.tradeCount,
-      mode: 'MULTI-ASSET v6.0',
+      mode: 'MULTI-ASSET v6.1',
       currentPrices, mtfScores,
       pendingProfitTaking: this.pendingProfitTaking
     };
