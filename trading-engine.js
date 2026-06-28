@@ -12,9 +12,11 @@ class TradingEngine {
       apiSecret: process.env.BINANCE_API_SECRET || '',
       asset: process.env.ASSET || 'BTCUSDT',
       capital: parseInt(process.env.CAPITAL) || 500,
-      maxPositions: 5,
-      minGapMs: 12000,
-      tickMs: 1000,
+      maxPositions: 1,
+      minGapMs: 6000,
+      tickMs: 3000,
+      tp: 0.005,
+      sl: 0.003,
       ...config
     };
 
@@ -30,7 +32,7 @@ class TradingEngine {
     this.currentPrice = 0;
     this.tickCounter = 0;
 
-    console.log(`⚙️  Bot Binance Testnet | ${this.config.asset} | Capital: $${this.capital}`);
+    console.log(`⚙️  Bot Binance Testnet | ${this.config.asset} | Capital: $${this.capital} | TP:+${this.config.tp*100}% SL:-${this.config.sl*100}%`);
   }
 
   sign(params) {
@@ -43,7 +45,6 @@ class TradingEngine {
     params.timestamp = Date.now();
     params.recvWindow = 5000;
     const query = this.sign(params);
-
     return new Promise((resolve, reject) => {
       const options = {
         hostname: BASE_URL,
@@ -105,8 +106,8 @@ class TradingEngine {
       });
 
       if (order && order.orderId) {
-        const sl = parseFloat((price * 0.99).toFixed(2));
-        const tp = parseFloat((price * 1.02).toFixed(2));
+        const sl = parseFloat((price * (1 - this.config.sl)).toFixed(2));
+        const tp = parseFloat((price * (1 + this.config.tp)).toFixed(2));
 
         // 4. Stop Loss
         await this.request('POST', '/fapi/v1/order', {
@@ -141,12 +142,12 @@ class TradingEngine {
 
         this.lastOpenTime = Date.now();
         this.tradeCount++;
-        console.log(`✅ ORDRE RÉEL #${this.tradeCount} | ID:${order.orderId} | Entry:$${price} | Qty:${qty} | SL:$${sl} | TP:$${tp}`);
+        console.log(`✅ ORDRE #${this.tradeCount} | ID:${order.orderId} | Entry:$${price} | Qty:${qty} | SL:$${sl} | TP:$${tp}`);
       } else {
         console.error(`❌ Ordre rejeté: ${JSON.stringify(order)}`);
       }
     } catch(e) {
-      console.error(`❌ placeOrder error: ${e.message}`);
+      console.error(`❌ placeOrder: ${e.message}`);
     }
   }
 
@@ -155,12 +156,8 @@ class TradingEngine {
       const result = await this.request('GET', '/fapi/v2/positionRisk', {
         symbol: this.config.asset
       });
-
-      // FIX : vérifie que c'est bien un tableau
       const positions = Array.isArray(result) ? result : [];
       const active = positions.filter(p => Math.abs(parseFloat(p.positionAmt)) > 0);
-
-      console.log(`🔄 Sync | Positions Binance actives: ${active.length} | Local: ${this.openTrades.length}`);
 
       if (active.length === 0 && this.openTrades.length > 0) {
         this.openTrades.forEach(t => {
@@ -173,12 +170,12 @@ class TradingEngine {
             status: pnl > 0 ? 'TP' : 'SL'
           });
           this.capital += pnl;
-          console.log(`📊 Trade fermé | PnL: $${pnl.toFixed(2)} | Capital: $${this.capital.toFixed(2)}`);
+          console.log(`📊 Fermé | PnL:$${pnl.toFixed(2)} | Capital:$${this.capital.toFixed(2)}`);
         });
         this.openTrades = [];
       }
     } catch(e) {
-      console.error(`❌ syncPositions error: ${e.message}`);
+      console.error(`❌ syncPositions: ${e.message}`);
     }
   }
 
@@ -213,8 +210,8 @@ class TradingEngine {
     this.priceHistory.push(price);
     if (this.priceHistory.length > 300) this.priceHistory.shift();
 
-    // Sync Binance toutes les 10 ticks
-    if (this.tickCounter % 10 === 0) {
+    // Sync Binance toutes les 3 ticks
+    if (this.tickCounter % 3 === 0) {
       await this.syncPositions();
     }
 
@@ -229,16 +226,13 @@ class TradingEngine {
         const timeSinceLast = now - this.lastOpenTime;
         const stake = this.getStake();
 
-        console.log(`💹 $${price.toFixed(2)} | Q:${Math.floor(sig.q)} | Action:${sig.action} | Mise:$${stake} | Open:${this.openTrades.length}/${this.config.maxPositions} | Capital:$${this.capital.toFixed(2)}`);
+        console.log(`💹 $${price.toFixed(2)} | Q:${Math.floor(sig.q)} | ${sig.action} | Mise:$${stake} | Pos:${this.openTrades.length} | Capital:$${this.capital.toFixed(2)}`);
 
-        // Condition ouverture : Q >= 30 (abaissé pour plus de trades)
-        const highProb = sig.action === 'BUY' &&
-          sig.q >= 30 &&
-          sig.emaFast > sig.emaSlow;
-
+        // Ouvre si signal + pas de position + délai 6s
         if (
-          highProb &&
-          this.openTrades.length < this.config.maxPositions &&
+          sig.action === 'BUY' &&
+          sig.q >= 30 &&
+          this.openTrades.length === 0 &&
           timeSinceLast >= this.config.minGapMs &&
           this.config.apiKey
         ) {
@@ -246,23 +240,23 @@ class TradingEngine {
         }
 
       } catch(e) {
-        console.error(`⚠️  Swarm error: ${e.message}`);
+        console.error(`⚠️ Swarm: ${e.message}`);
       }
     } else {
-      console.log(`⏳ Init... (${this.priceHistory.length}/30) | $${price.toFixed(2)}`);
+      console.log(`⏳ Init (${this.priceHistory.length}/30) | $${price.toFixed(2)}`);
     }
   }
 
   async start() {
     if (this.running) return;
     this.running = true;
-    console.log(`🚀 BOT DÉMARRÉ | ${this.config.asset} | Capital:$${this.capital} | TESTNET RÉEL`);
+    console.log(`🚀 BOT DÉMARRÉ | ${this.config.asset} | TP:+${this.config.tp*100}% | SL:-${this.config.sl*100}% | Gap:${this.config.minGapMs}ms`);
 
     while (this.running) {
       try {
         await this.tick();
       } catch(e) {
-        console.error(`❌ Tick error: ${e.message}`);
+        console.error(`❌ Tick: ${e.message}`);
       }
       await new Promise(r => setTimeout(r, this.config.tickMs));
     }
@@ -270,7 +264,7 @@ class TradingEngine {
 
   stop() {
     this.running = false;
-    console.log(`⏸️  BOT STOPPÉ | Capital: $${this.capital.toFixed(2)}`);
+    console.log(`⏸️ BOT STOPPÉ | Capital: $${this.capital.toFixed(2)}`);
   }
 
   getStats() {
