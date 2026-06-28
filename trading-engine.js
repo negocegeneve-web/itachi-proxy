@@ -22,7 +22,7 @@ class SymbolBot {
     this.priceHistory = [];
     this.openTrade = null;
     this.lastOpenTime = 0;
-    this.TRADE_TIMEOUT_MS = 60000; // 1 minute max par trade
+    this.TRADE_TIMEOUT_MS = 90000; // 90s timeout
     console.log(`⚙️  SymbolBot | ${this.symbol}`);
   }
 
@@ -47,26 +47,24 @@ class SymbolBot {
     }
   }
 
-  // Fermeture forcée au marché
   async forceClose(price, reason) {
     try {
-      console.log(`⏱️  ${this.symbol} TIMEOUT (${reason}) | Fermeture forcée @ $${price}`);
+      const pnl = (price - this.openTrade.entry) * this.openTrade.qty;
+      console.log(`⏱️  ${this.symbol} TIMEOUT | ${reason} | PnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`);
 
-      // Annule les ordres SL/TP existants
+      // Annule SL/TP
       await this.engine.request('DELETE', '/fapi/v1/allOpenOrders', {
         symbol: this.symbol
       });
 
       // Ferme au marché
-      const closeOrder = await this.engine.request('POST', '/fapi/v1/order', {
+      await this.engine.request('POST', '/fapi/v1/order', {
         symbol: this.symbol,
         side: 'SELL',
         type: 'MARKET',
         quantity: this.openTrade.qty,
         reduceOnly: 'true'
       });
-
-      const pnl = (price - this.openTrade.entry) * this.openTrade.qty;
 
       this.engine.closedTrades.push({
         ...this.openTrade,
@@ -78,8 +76,7 @@ class SymbolBot {
 
       this.engine.capital += pnl;
       this.engine.openTrades = this.engine.openTrades.filter(t => t.id !== this.openTrade.id);
-
-      console.log(`📊 ${this.symbol} FORCÉ | PnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | Capital: $${this.engine.capital.toFixed(2)}`);
+      console.log(`📊 ${this.symbol} FERMÉ | PnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | Capital: $${this.engine.capital.toFixed(2)}`);
       this.openTrade = null;
     } catch(e) {
       console.error(`❌ ${this.symbol} forceClose: ${e.message}`);
@@ -94,10 +91,11 @@ class SymbolBot {
       const now = Date.now();
       const tradeAge = now - this.openTrade.openTime;
       const pnl = (price - this.openTrade.entry) * this.openTrade.qty;
+      const remaining = Math.max(0, this.TRADE_TIMEOUT_MS - tradeAge);
 
-      // ⏱️ TIMEOUT 1 MINUTE : ferme même si pas au TP
+      // ⏱️ TIMEOUT 90s
       if (tradeAge >= this.TRADE_TIMEOUT_MS) {
-        await this.forceClose(price, `${Math.floor(tradeAge/1000)}s écoulées | PnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`);
+        await this.forceClose(price, `90s écoulées`);
         return;
       }
 
@@ -110,8 +108,7 @@ class SymbolBot {
       const currentAmt = active ? Math.abs(parseFloat(active.positionAmt)) : 0;
 
       if (currentAmt === 0 && this.openTrade) {
-        // Position fermée par SL/TP Binance
-        let realPnL = 0;
+        let realPnL = pnl;
         try {
           const income = await this.engine.request('GET', '/fapi/v1/income', {
             symbol: this.symbol,
@@ -120,12 +117,8 @@ class SymbolBot {
           });
           if (Array.isArray(income) && income.length > 0) {
             realPnL = parseFloat(income[0].income);
-          } else {
-            realPnL = pnl;
           }
-        } catch(e) {
-          realPnL = pnl;
-        }
+        } catch(e) {}
 
         this.engine.closedTrades.push({
           ...this.openTrade,
@@ -137,12 +130,11 @@ class SymbolBot {
 
         this.engine.capital += realPnL;
         this.engine.openTrades = this.engine.openTrades.filter(t => t.id !== this.openTrade.id);
-        console.log(`📊 ${this.symbol} FERMÉ | PnL: $${realPnL.toFixed(2)} | Capital: $${this.engine.capital.toFixed(2)}`);
+        console.log(`📊 ${this.symbol} FERMÉ | PnL: ${realPnL >= 0 ? '+' : ''}$${realPnL.toFixed(2)} | Capital: $${this.engine.capital.toFixed(2)}`);
         this.openTrade = null;
       } else if (active) {
         const unrealPnL = parseFloat(active.unRealizedProfit || 0);
-        const remaining = Math.max(0, this.TRADE_TIMEOUT_MS - tradeAge);
-        console.log(`🔄 ${this.symbol} | PnL: $${unrealPnL.toFixed(2)} | Ferme dans: ${Math.floor(remaining/1000)}s`);
+        console.log(`🔄 ${this.symbol} | PnL: ${unrealPnL >= 0 ? '+' : ''}$${unrealPnL.toFixed(2)} | Ferme dans: ${Math.floor(remaining/1000)}s`);
       }
     } catch(e) {
       console.error(`❌ ${this.symbol} sync: ${e.message}`);
@@ -173,10 +165,9 @@ class SymbolBot {
       });
 
       if (order && order.orderId) {
-        const sl = parseFloat((price * 0.997).toFixed(2));
-        const tp = parseFloat((price * 1.005).toFixed(2));
+        const sl = parseFloat((price * 0.996).toFixed(2));
+        const tp = parseFloat((price * 1.008).toFixed(2));
 
-        // SL
         await this.engine.request('POST', '/fapi/v1/order', {
           symbol: this.symbol,
           side: 'SELL',
@@ -185,7 +176,6 @@ class SymbolBot {
           closePosition: 'true'
         });
 
-        // TP
         await this.engine.request('POST', '/fapi/v1/order', {
           symbol: this.symbol,
           side: 'SELL',
@@ -211,7 +201,7 @@ class SymbolBot {
         this.engine.tradeCount++;
         this.engine.openTrades.push(this.openTrade);
 
-        console.log(`✅ #${this.engine.tradeCount} ${this.symbol} | Entry:$${price} | SL:$${sl} | TP:$${tp} | Timeout:60s`);
+        console.log(`✅ #${this.engine.tradeCount} ${this.symbol} | $${price} | SL:$${sl} | TP:$${tp} | Lev:${lev}x | Timeout:90s`);
       } else {
         console.error(`❌ ${this.symbol} rejeté: ${JSON.stringify(order)}`);
       }
@@ -242,11 +232,11 @@ class SymbolBot {
     const now = Date.now();
     const timeSinceLast = now - this.lastOpenTime;
 
-    console.log(`💹 ${this.symbol}: $${price.toFixed(2)} | Q:${Math.floor(sig.q)} | ${sig.action} | Pos:${this.openTrade ? '1' : '0'}`);
+    console.log(`💹 ${this.symbol}: $${price.toFixed(2)} | Q:${Math.floor(sig.q)} | ${sig.action} | EMA:${sig.emaFast?.toFixed(1)}>${sig.emaSlow?.toFixed(1)} | Pos:${this.openTrade ? '1' : '0'}`);
 
     if (
       sig.action === 'BUY' &&
-      sig.q >= 25 &&
+      sig.q >= 55 &&
       !this.openTrade &&
       timeSinceLast >= 6000 &&
       this.engine.config.apiKey
@@ -274,7 +264,7 @@ class TradingEngine {
     this.running = false;
     this.tradeCount = 0;
 
-    console.log(`⚙️  TradingEngine | ${SYMBOLS.length} assets | Capital: $${this.capital}`);
+    console.log(`⚙️  TradingEngine MULTI-ASSET | ${SYMBOLS.length} assets | Capital: $${this.capital}`);
   }
 
   sign(params) {
@@ -333,7 +323,7 @@ class TradingEngine {
     if (this.running) return;
     this.running = true;
     console.log(`🚀 MULTI-BOT DÉMARRÉ | ${SYMBOLS.length} assets | Capital:$${this.capital}`);
-    console.log(`⏱️  Timeout: 60s par trade | TP:+0.5% | SL:-0.3%`);
+    console.log(`🎯 Stratégie: Q>=55 | TP:+0.8% | SL:-0.4% | Timeout:90s | EMA 8/21/50`);
 
     while (this.running) {
       try {
@@ -347,7 +337,7 @@ class TradingEngine {
 
   stop() {
     this.running = false;
-    console.log(`⏸️  MULTI-BOT STOPPÉ | Capital: $${this.capital.toFixed(2)}`);
+    console.log(`⏸️  MULTI-BOT STOPPÉ | Capital: $${this.capital.toFixed(2)} | Trades: ${this.tradeCount}`);
   }
 
   getStats() {
