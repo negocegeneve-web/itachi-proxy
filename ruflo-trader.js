@@ -2,8 +2,9 @@ class StrategyAgent {
   analyze(priceData) {
     try {
       if (!priceData || !Array.isArray(priceData) || priceData.length < 21) {
-        return { action: 'HOLD', q: 0, rsi: 50, emaFast: 0, emaSlow: 0, momentum: 0 };
+        return { action: 'HOLD', q: 0, rsi: 50, direction: 'NONE', emaFast: 0, emaSlow: 0, momentum: 0 };
       }
+
       const emaFast = this.calcEMA(priceData, 8);
       const emaSlow = this.calcEMA(priceData, 21);
       const rsi = this.calcRSI(priceData, 14);
@@ -12,60 +13,80 @@ class StrategyAgent {
       const prev5 = priceData[Math.max(0, priceData.length - 6)];
       const momentum = last - prev;
       const momentum5 = last - prev5;
-
-      // ✅ Moyenne mobile 20 (filtre tendance)
       const ma20 = priceData.slice(-20).reduce((a,b) => a+b, 0) / Math.min(20, priceData.length);
-      const ma50 = priceData.slice(-50).reduce((a,b) => a+b, 0) / Math.min(50, priceData.length);
 
       let action = 'HOLD';
+      let direction = 'NONE';
       let q = 0;
 
-      // ✅ CONDITIONS STRICTES :
-      // 1. EMA fast > EMA slow
-      // 2. Prix > MA20 (tendance haussière court terme)
-      // 3. MA20 > MA50 (tendance haussière long terme)
-      // 4. Momentum positif sur 1 ET 5 prix
-      // 5. RSI entre 35 et 65 (pas extrême)
+      // ✅ Signal LONG (tendance haussière)
       if (
         emaFast > emaSlow &&
         last > ma20 &&
-        ma20 > ma50 &&
         momentum > 0 &&
-        momentum5 > 0 &&
-        rsi > 35 && rsi < 65
+        rsi > 30 && rsi < 70
       ) {
         action = 'BUY';
+        direction = 'LONG';
         q = 55;
 
-        // Boost EMA spread
         const spread = (emaFast - emaSlow) / emaSlow * 100;
         q += Math.min(15, spread * 300);
-
-        // Boost momentum
         const momStrength = Math.abs(momentum5) / Math.max(prev5, 0.001) * 100;
         q += Math.min(15, momStrength * 2000);
-
-        // Boost RSI zone optimale
         if (rsi >= 40 && rsi <= 60) q += 15;
-        else if (rsi >= 38 && rsi <= 62) q += 8;
+        else if (rsi >= 35 && rsi <= 65) q += 8;
+      }
+
+      // ✅ Signal SHORT (tendance baissière)
+      else if (
+        emaFast < emaSlow &&
+        last < ma20 &&
+        momentum < 0 &&
+        rsi > 30 && rsi < 70
+      ) {
+        action = 'SELL';
+        direction = 'SHORT';
+        q = 55;
+
+        const spread = (emaSlow - emaFast) / emaSlow * 100;
+        q += Math.min(15, spread * 300);
+        const momStrength = Math.abs(momentum5) / Math.max(prev5, 0.001) * 100;
+        q += Math.min(15, momStrength * 2000);
+        if (rsi >= 40 && rsi <= 60) q += 15;
+        else if (rsi >= 35 && rsi <= 65) q += 8;
+      }
+
+      // RSI extrême oversold → LONG fort
+      if (rsi < 30 && momentum > 0) {
+        action = 'BUY';
+        direction = 'LONG';
+        q = Math.max(q, 60);
+      }
+
+      // RSI extrême overbought → SHORT fort
+      if (rsi > 70 && momentum < 0) {
+        action = 'SELL';
+        direction = 'SHORT';
+        q = Math.max(q, 60);
       }
 
       q = Math.min(100, Math.max(0, q));
 
       return {
         action,
+        direction,
         q: parseFloat(q.toFixed(2)),
         rsi: parseFloat(rsi.toFixed(2)),
         emaFast: parseFloat(emaFast.toFixed(4)),
         emaSlow: parseFloat(emaSlow.toFixed(4)),
         momentum: parseFloat(momentum.toFixed(6)),
         momentum5: parseFloat(momentum5.toFixed(6)),
-        ma20: parseFloat(ma20.toFixed(2)),
-        ma50: parseFloat(ma50.toFixed(2))
+        ma20: parseFloat(ma20.toFixed(2))
       };
     } catch(e) {
       console.error(`StrategyAgent error: ${e.message}`);
-      return { action: 'HOLD', q: 0, rsi: 50, emaFast: 0, emaSlow: 0, momentum: 0 };
+      return { action: 'HOLD', q: 0, rsi: 50, direction: 'NONE', emaFast: 0, emaSlow: 0, momentum: 0 };
     }
   }
 
@@ -95,25 +116,22 @@ class StrategyAgent {
 class RiskAgent {
   validate(signal, portfolio) {
     if (!signal || !portfolio) {
-      return { approved: false, leverage: 7, tp: 0.020, sl: 0.010 };
+      return { approved: false, leverage: 7, tp: 0.020, sl: 0.010, direction: 'NONE' };
     }
 
-    // ✅ Leverage selon confiance
     let leverage = 7;
-    if (signal.q >= 80) leverage = 12;      // Fort → 12x
-    else if (signal.q >= 55) leverage = 7;  // Normal → 7x
-    else leverage = 3;                       // Faible → 3x
+    if (signal.q >= 80) leverage = 12;
+    else if (signal.q >= 55) leverage = 7;
+    else leverage = 3;
 
-    // ✅ TP minimum 2% pour couvrir fees + profit
     let tp = 0.020;
-    if (signal.q >= 80) tp = 0.025;         // Fort → +2.5%
-    else if (signal.q >= 55) tp = 0.020;    // Normal → +2%
-    else tp = 0.015;                         // Faible → +1.5%
+    if (signal.q >= 80) tp = 0.025;
+    else if (signal.q >= 55) tp = 0.020;
+    else tp = 0.015;
 
-    // Approuve si Q >= 50 (plus strict)
-    const approved = signal.action === 'BUY' && signal.q >= 50;
+    const approved = (signal.action === 'BUY' || signal.action === 'SELL') && signal.q >= 50;
 
-    return { approved, leverage, tp, sl: 0.010 };
+    return { approved, leverage, tp, sl: 0.010, direction: signal.direction };
   }
 }
 
@@ -169,6 +187,7 @@ class TradingSwarm {
     this.lastLeverage = 7;
     this.lastTP = 0.020;
     this.lastSL = 0.010;
+    this.lastDirection = 'NONE';
   }
 
   coordinate(priceData, portfolio) {
@@ -177,8 +196,10 @@ class TradingSwarm {
     this.lastLeverage = risk.leverage;
     this.lastTP = risk.tp;
     this.lastSL = risk.sl;
+    this.lastDirection = risk.direction;
     return {
       action: risk.approved ? sig.action : 'HOLD',
+      direction: risk.direction,
       q: sig.q,
       rsi: sig.rsi,
       leverage: risk.leverage,
@@ -187,8 +208,7 @@ class TradingSwarm {
       emaFast: sig.emaFast,
       emaSlow: sig.emaSlow,
       momentum: sig.momentum,
-      ma20: sig.ma20,
-      ma50: sig.ma50
+      ma20: sig.ma20
     };
   }
 
