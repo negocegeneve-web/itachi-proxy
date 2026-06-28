@@ -1,6 +1,7 @@
 const https = require('https');
 const crypto = require('crypto');
 const { TradingSwarm } = require('./ruflo-trader');
+const MultiTimeframeAnalyzer = require('./multi-timeframe');
 
 const BASE_URL = 'testnet.binancefuture.com';
 
@@ -19,10 +20,13 @@ class SymbolBot {
     this.minQty = symbolConfig.minQty;
     this.engine = engine;
     this.swarm = new TradingSwarm();
+    this.mtf = new MultiTimeframeAnalyzer(this.symbol);
     this.priceHistory = [];
     this.openTrade = null;
     this.lastOpenTime = 0;
-    this.TRADE_TIMEOUT_MS = 90000; // 90s timeout
+    this.lastMTFTime = 0;
+    this.MTF_REFRESH_MS = 30000; // Refresh MTF toutes les 30s
+    this.TRADE_TIMEOUT_MS = 90000;
     console.log(`⚙️  SymbolBot | ${this.symbol}`);
   }
 
@@ -52,12 +56,10 @@ class SymbolBot {
       const pnl = (price - this.openTrade.entry) * this.openTrade.qty;
       console.log(`⏱️  ${this.symbol} TIMEOUT | ${reason} | PnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`);
 
-      // Annule SL/TP
       await this.engine.request('DELETE', '/fapi/v1/allOpenOrders', {
         symbol: this.symbol
       });
 
-      // Ferme au marché
       await this.engine.request('POST', '/fapi/v1/order', {
         symbol: this.symbol,
         side: 'SELL',
@@ -76,7 +78,7 @@ class SymbolBot {
 
       this.engine.capital += pnl;
       this.engine.openTrades = this.engine.openTrades.filter(t => t.id !== this.openTrade.id);
-      console.log(`📊 ${this.symbol} FERMÉ | PnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | Capital: $${this.engine.capital.toFixed(2)}`);
+      console.log(`📊 ${this.symbol} FERMÉ FORCÉ | PnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | Capital: $${this.engine.capital.toFixed(2)}`);
       this.openTrade = null;
     } catch(e) {
       console.error(`❌ ${this.symbol} forceClose: ${e.message}`);
@@ -90,16 +92,12 @@ class SymbolBot {
 
       const now = Date.now();
       const tradeAge = now - this.openTrade.openTime;
-      const pnl = (price - this.openTrade.entry) * this.openTrade.qty;
-      const remaining = Math.max(0, this.TRADE_TIMEOUT_MS - tradeAge);
 
-      // ⏱️ TIMEOUT 90s
       if (tradeAge >= this.TRADE_TIMEOUT_MS) {
         await this.forceClose(price, `90s écoulées`);
         return;
       }
 
-      // Check position Binance
       const result = await this.engine.request('GET', '/fapi/v2/positionRisk', {
         symbol: this.symbol
       });
@@ -108,7 +106,7 @@ class SymbolBot {
       const currentAmt = active ? Math.abs(parseFloat(active.positionAmt)) : 0;
 
       if (currentAmt === 0 && this.openTrade) {
-        let realPnL = pnl;
+        let realPnL = (price - this.openTrade.entry) * this.openTrade.qty;
         try {
           const income = await this.engine.request('GET', '/fapi/v1/income', {
             symbol: this.symbol,
@@ -134,6 +132,7 @@ class SymbolBot {
         this.openTrade = null;
       } else if (active) {
         const unrealPnL = parseFloat(active.unRealizedProfit || 0);
+        const remaining = Math.max(0, this.TRADE_TIMEOUT_MS - tradeAge);
         console.log(`🔄 ${this.symbol} | PnL: ${unrealPnL >= 0 ? '+' : ''}$${unrealPnL.toFixed(2)} | Ferme dans: ${Math.floor(remaining/1000)}s`);
       }
     } catch(e) {
@@ -141,7 +140,7 @@ class SymbolBot {
     }
   }
 
-  async placeOrder(price) {
+  async placeOrder(price, mtfScore) {
     try {
       const stake = this.engine.getStake();
       const lev = this.swarm.lastLeverage || 7;
@@ -165,8 +164,12 @@ class SymbolBot {
       });
 
       if (order && order.orderId) {
-        const sl = parseFloat((price * 0.996).toFixed(2));
-        const tp = parseFloat((price * 1.008).toFixed(2));
+        // SL/TP selon volatilité symbol
+        const slPct = ['SOLUSDT', 'XRPUSDT'].includes(this.symbol) ? 0.006 : 0.004;
+        const tpPct = ['SOLUSDT', 'XRPUSDT'].includes(this.symbol) ? 0.010 : 0.008;
+
+        const sl = parseFloat((price * (1 - slPct)).toFixed(2));
+        const tp = parseFloat((price * (1 + tpPct)).toFixed(2));
 
         await this.engine.request('POST', '/fapi/v1/order', {
           symbol: this.symbol,
@@ -194,14 +197,15 @@ class SymbolBot {
           tp,
           direction: 'LONG',
           openTime: Date.now(),
-          leverage: lev
+          leverage: lev,
+          mtfScore
         };
 
         this.lastOpenTime = Date.now();
         this.engine.tradeCount++;
         this.engine.openTrades.push(this.openTrade);
 
-        console.log(`✅ #${this.engine.tradeCount} ${this.symbol} | $${price} | SL:$${sl} | TP:$${tp} | Lev:${lev}x | Timeout:90s`);
+        console.log(`✅ #${this.engine.tradeCount} ${this.symbol} | $${price} | SL:$${sl}(-${(slPct*100).toFixed(1)}%) | TP:$${tp}(+${(tpPct*100).toFixed(1)}%) | MTF:${mtfScore} | Lev:${lev}x`);
       } else {
         console.error(`❌ ${this.symbol} rejeté: ${JSON.stringify(order)}`);
       }
@@ -224,24 +228,40 @@ class SymbolBot {
       return;
     }
 
+    // Refresh MTF toutes les 30s
+    const now = Date.now();
+    if (now - this.lastMTFTime >= this.MTF_REFRESH_MS) {
+      await this.mtf.analyze(price);
+      this.lastMTFTime = now;
+    }
+
+    const mtfScore = this.mtf.lastScore || 50;
+    const mtfBias = this.mtf.lastAnalysis?.bias || 'NEUTRAL';
+
     const sig = this.swarm.coordinate(this.priceHistory, {
       capital: this.engine.capital,
       trades: this.engine.openTrades
     });
 
-    const now = Date.now();
     const timeSinceLast = now - this.lastOpenTime;
 
-    console.log(`💹 ${this.symbol}: $${price.toFixed(2)} | Q:${Math.floor(sig.q)} | ${sig.action} | EMA:${sig.emaFast?.toFixed(1)}>${sig.emaSlow?.toFixed(1)} | Pos:${this.openTrade ? '1' : '0'}`);
+    console.log(`💹 ${this.symbol}: $${price.toFixed(2)} | Q:${Math.floor(sig.q)} | ${sig.action} | MTF:${mtfScore.toFixed(0)}(${mtfBias}) | Pos:${this.openTrade ? '1' : '0'}`);
 
+    // ✅ OUVRE SEULEMENT SI :
+    // 1. Signal Ruflo BUY + Q >= 55
+    // 2. MTF Score >= 60 (majorité timeframes haussiers)
+    // 3. Pas de position ouverte
+    // 4. Délai 6s respecté
     if (
       sig.action === 'BUY' &&
       sig.q >= 55 &&
+      mtfScore >= 60 &&
+      mtfBias !== 'BEAR' &&
       !this.openTrade &&
       timeSinceLast >= 6000 &&
       this.engine.config.apiKey
     ) {
-      await this.placeOrder(price);
+      await this.placeOrder(price, mtfScore);
     }
   }
 }
@@ -264,7 +284,7 @@ class TradingEngine {
     this.running = false;
     this.tradeCount = 0;
 
-    console.log(`⚙️  TradingEngine MULTI-ASSET | ${SYMBOLS.length} assets | Capital: $${this.capital}`);
+    console.log(`⚙️  TradingEngine MULTI-ASSET MTF | ${SYMBOLS.length} assets | Capital: $${this.capital}`);
   }
 
   sign(params) {
@@ -322,8 +342,9 @@ class TradingEngine {
   async start() {
     if (this.running) return;
     this.running = true;
-    console.log(`🚀 MULTI-BOT DÉMARRÉ | ${SYMBOLS.length} assets | Capital:$${this.capital}`);
-    console.log(`🎯 Stratégie: Q>=55 | TP:+0.8% | SL:-0.4% | Timeout:90s | EMA 8/21/50`);
+    console.log(`🚀 MULTI-BOT MTF DÉMARRÉ | ${SYMBOLS.length} assets | Capital:$${this.capital}`);
+    console.log(`🎯 MTF: 21d/7d/24h/12h/4h/15m/3m/1m | S/R: 8 niveaux | Score>=60 | Q>=55`);
+    console.log(`⏱️  Timeout:90s | TP:+0.8% | SL:-0.4% | SOL/XRP: TP:+1% SL:-0.6%`);
 
     while (this.running) {
       try {
@@ -347,6 +368,16 @@ class TradingEngine {
     const totalPnL = this.closedTrades.reduce((sum, t) => sum + t.pnl, 0);
     const winRate = totalTrades > 0 ? (winTrades / totalTrades * 100).toFixed(1) : 0;
 
+    // MTF scores par asset
+    const mtfScores = {};
+    this.bots.forEach(b => {
+      mtfScores[b.symbol] = {
+        score: b.mtf.lastScore || 0,
+        bias: b.mtf.lastAnalysis?.bias || 'NEUTRAL',
+        trends: b.mtf.lastAnalysis?.trends || {}
+      };
+    });
+
     return {
       openTrades: this.openTrades.length,
       closedTrades: totalTrades,
@@ -358,7 +389,8 @@ class TradingEngine {
       running: this.running,
       currentStake: this.getStake(),
       tradeCount: this.tradeCount,
-      mode: 'MULTI-ASSET TESTNET'
+      mode: 'MULTI-ASSET MTF',
+      mtfScores
     };
   }
 }
