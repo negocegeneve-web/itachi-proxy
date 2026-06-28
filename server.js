@@ -336,3 +336,155 @@ async function update() {
     document.getElementById('totalPnL').className = net>=0?'positive':'negative';
     document.getElementById('netRoi').textContent = (s.netRoi||'0.00')+'%';
     document.getElementById('netRoi').className = parseFloat(s.netRoi||0)>=0?'positive':'negative';
+    document.getElementById('currentStake').textContent = '$'+(s.currentStake||65);
+
+    // Fee box
+    document.getElementById('grossPnL').textContent = (gross>=0?'+':'')+' $'+gross.toFixed(2);
+    document.getElementById('grossPnL').className = gross>=0?'positive':'negative';
+    document.getElementById('totalFees').textContent = '-$'+fees.toFixed(2);
+    document.getElementById('netPnL').textContent = (net>=0?'+':'')+' $'+net.toFixed(2);
+    document.getElementById('netPnL').className = net>=0?'positive':'negative';
+    document.getElementById('realCapital').textContent = '$'+((data.capital||500)).toFixed(2);
+
+    // Stats
+    document.getElementById('openCount').textContent = s.openTrades||0;
+    document.getElementById('totalCount').textContent = s.closedTrades||0;
+    document.getElementById('winCount').textContent = s.winTrades||0;
+    document.getElementById('lossCount').textContent = s.lossTrades||0;
+    document.getElementById('tradeCount').textContent = s.tradeCount||0;
+    const wr = s.winRate||0;
+    document.getElementById('winRate').textContent = s.closedTrades>0?wr+'%':'--%';
+    document.getElementById('winRate').className = 'stat-value '+(wr>=60?'positive':wr>=45?'neutral':'negative');
+    document.getElementById('statStatus').textContent = s.running?'🟢 ON':'⏹️ OFF';
+    document.getElementById('statTime').textContent = new Date().toLocaleTimeString('fr-FR');
+
+    // Chart
+    if (data.priceHistory?.length > 0 && chart) {
+      chart.data.labels = data.priceHistory.map((_,i) => i%10===0?i:'');
+      chart.data.datasets[0].data = data.priceHistory;
+      chart.update('none');
+    }
+
+    // MTF
+    if (s.mtfScores) renderMTF(s.mtfScores);
+
+    // Sync boutons
+    if (data.running) {
+      document.getElementById('btnStart').disabled = true;
+      document.getElementById('btnStop').disabled = false;
+      document.getElementById('status').className = 'status-bar';
+      document.getElementById('status').textContent = '🟢 Multi-Bot v6.0 EN COURS — 5 assets';
+    }
+
+    // Profit Taking Modal
+    if (s.pendingProfitTaking && s.pendingProfitTaking.threshold !== lastPTThreshold) {
+      const pt = s.pendingProfitTaking;
+      lastPTThreshold = pt.threshold;
+      document.getElementById('profitMsg').innerHTML =
+        '<strong>🎉 Capital atteint $'+pt.threshold+'!</strong><br><br>'+
+        'Sauvegarder <strong>$'+pt.toSave+'</strong> et continuer avec <strong>$'+pt.newCapital+'</strong>?<br><br>'+
+        '<small style="opacity:0.7">Le bot continue de trader avec $'+pt.newCapital+'</small>';
+      document.getElementById('profitModal').style.display = 'flex';
+    }
+
+    // Positions ouvertes
+    const ob = document.getElementById('openBody');
+    if (!data.trades?.length) {
+      ob.innerHTML = '<tr><td colspan="11" style="text-align:center;opacity:0.5;">Aucune position ouverte</td></tr>';
+    } else {
+      ob.innerHTML = data.trades.map(t => {
+        const cp = currentPrices[t.symbol] || t.entry;
+        const grossPnl = (cp - t.entry) * t.qty;
+        const fees = t.entry * t.qty * 0.0004 + cp * t.qty * 0.0004;
+        const netP = grossPnl - fees;
+        const pct = ((cp - t.entry)/t.entry*100).toFixed(2);
+        return '<tr>'+
+          '<td><span class="badge-sym">'+(t.symbol||'').replace('USDT','')+'</span></td>'+
+          '<td>$'+t.entry.toFixed(2)+'</td>'+
+          '<td>$'+cp.toFixed(2)+'</td>'+
+          '<td>$'+t.sl.toFixed(2)+' 📍</td>'+
+          '<td>$'+t.tp.toFixed(2)+'</td>'+
+          '<td>$'+t.stake+'</td>'+
+          '<td>'+t.leverage+'x</td>'+
+          '<td>'+(t.q||'--').toFixed?t.q.toFixed(0):(t.q||'--')+'</td>'+
+          '<td class="'+(grossPnl>=0?'positive':'negative')+'">'+(grossPnl>=0?'+':'')+' $'+grossPnl.toFixed(2)+'</td>'+
+          '<td class="negative">-$'+fees.toFixed(2)+'</td>'+
+          '<td class="'+(netP>=0?'positive':'negative')+'">'+(netP>=0?'+':'')+' $'+netP.toFixed(2)+'</td>'+
+          '</tr>';
+      }).join('');
+    }
+
+    // Historique
+    const hb = document.getElementById('histBody');
+    if (!data.closedTrades?.length) {
+      hb.innerHTML = '<tr><td colspan="10" style="text-align:center;opacity:0.5;">Aucun trade fermé</td></tr>';
+    } else {
+      hb.innerHTML = data.closedTrades.slice(-20).reverse().map(t => {
+        const bc = t.status==='TP'?'badge-tp':t.status==='TIMEOUT+'?'badge-tp-t':t.status==='TIMEOUT-'?'badge-sl-t':'badge-sl';
+        const g = t.grossPnL || t.pnl;
+        const f = t.fees || 0;
+        const n = t.pnl;
+        return '<tr>'+
+          '<td>'+new Date(t.closeTime).toLocaleTimeString('fr-FR')+'</td>'+
+          '<td><span class="badge-sym">'+(t.symbol||'').replace('USDT','')+'</span></td>'+
+          '<td>$'+t.entry.toFixed(2)+'</td>'+
+          '<td>$'+t.exit.toFixed(2)+'</td>'+
+          '<td>$'+t.stake+'</td>'+
+          '<td>'+(t.leverage||7)+'x</td>'+
+          '<td><span class="badge '+bc+'">'+t.status+'</span></td>'+
+          '<td class="'+(g>=0?'positive':'negative')+'">'+(g>=0?'+':'')+' $'+g.toFixed(2)+'</td>'+
+          '<td class="negative">-$'+f.toFixed(2)+'</td>'+
+          '<td class="'+(n>=0?'positive':'negative')+'">'+(n>=0?'+':'')+' $'+n.toFixed(2)+'</td>'+
+          '</tr>';
+      }).join('');
+    }
+
+  } catch(e) {
+    document.getElementById('status').className = 'status-bar error';
+    document.getElementById('status').textContent = '🔴 Erreur connexion';
+  }
+}
+
+initChart();
+update();
+setInterval(update, 3000);
+</script>
+</body>
+</html>`);
+    return;
+  }
+
+  if (req.url === '/api/binance') {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => {
+      try {
+        const { path: p, method: m='GET', params={} } = JSON.parse(body||'{}');
+        const k = req.headers['x-api-key'];
+        const s = req.headers['x-api-secret'];
+        const mode = req.headers['x-bn-mode']||'testnet';
+        if (!k||!s) { res.writeHead(400,cors()); res.end(JSON.stringify({error:'Clés manquantes'})); return; }
+        const BASE = mode==='mainnet'?'fapi.binance.com':'demo-fapi.binance.com';
+        const ts = Date.now();
+        const qBase = Object.entries({...params,timestamp:ts}).map(([a,b])=>a+'='+b).join('&');
+        const sig = hmacSHA256(s,qBase);
+        const query = qBase+'&signature='+sig;
+        const rPath = m==='GET'?p+'?'+query:p;
+        const pb = (m==='POST'||m==='DELETE')?query:'';
+        const opts = { hostname:BASE, path:rPath, method:m, headers:{'X-MBX-APIKEY':k,'Content-Type':'application/x-www-form-urlencoded','Content-Length':Buffer.byteLength(pb)} };
+        const pr = https.request(opts, r2 => { let d=''; r2.on('data',c=>d+=c); r2.on('end',()=>{ res.writeHead(200,{...cors(),'Content-Type':'application/json'}); res.end(d); }); });
+        pr.on('error',e=>{ res.writeHead(500,cors()); res.end(JSON.stringify({error:e.message})); });
+        if (pb) pr.write(pb);
+        pr.end();
+      } catch(e) { res.writeHead(500,cors()); res.end(JSON.stringify({error:e.message})); }
+    });
+    return;
+  }
+
+  res.writeHead(404,cors());
+  res.end('Not found');
+
+}).listen(PORT, () => {
+  console.log('🎯 Itachi v6.0 running on port '+PORT);
+  engine.start();
+});
