@@ -13,7 +13,7 @@ class TradingEngine {
       mode: process.env.BINANCE_MODE || 'testnet',
       asset: process.env.ASSET || 'BTCUSDT',
       capital: parseInt(process.env.CAPITAL) || 500,
-      tickMs: 400,
+      tickMs: 5000,
       ...config
     };
     
@@ -55,19 +55,30 @@ class TradingEngine {
     this.priceHistory.push(price);
     if (this.priceHistory.length > 300) this.priceHistory.shift();
 
-    // Signal Ruflo
-    const sig = this.swarm.coordinate(this.priceHistory, { capital: this.capital, trades: this.trades });
-    
-    console.log(`💹 ${this.config.asset}: $${price} | Signal: ${sig.action} Q:${sig.q}`);
+    // Signal Ruflo - seulement après 30 prix
+    if (this.priceHistory.length >= 30) {
+      try {
+        const sig = this.swarm.coordinate(this.priceHistory, { capital: this.capital, trades: this.trades });
+        console.log(`💹 ${this.config.asset}: $${price} | Signal: ${sig.action} | Q:${sig.q} | Lev:${sig.leverage}`);
+      } catch(e) {
+        console.error(`⚠️  Swarm error: ${e.message}`);
+      }
+    } else {
+      console.log(`⏳ Init... (${this.priceHistory.length}/30 prix) | ${this.config.asset}: $${price}`);
+    }
   }
 
   async start() {
     if (this.running) return;
     this.running = true;
-    console.log(`🚀 Trading Engine STARTED | ${this.config.asset}`);
+    console.log(`🚀 Trading Engine STARTED | ${this.config.asset} | Tick: ${this.config.tickMs}ms`);
     
     while (this.running) {
-      await this.tick();
+      try {
+        await this.tick();
+      } catch(e) {
+        console.error(`❌ Tick error: ${e.message}`);
+      }
       await new Promise(resolve => setTimeout(resolve, this.config.tickMs));
     }
   }
