@@ -1,5 +1,5 @@
 // ruflo-trader.js
-// Agents Ruflo pour stratégie de trading EMA adaptatif (Version agressif)
+// Agents Ruflo - Stratégie entrées multiples rapides
 
 class StrategyAgent {
   analyze(priceData) {
@@ -11,31 +11,31 @@ class StrategyAgent {
       const emaFast = this.calcEMA(priceData, 8);
       const emaSlow = this.calcEMA(priceData, 21);
       
-      // Momentum sur 3 derniers prix (plus sensible)
-      const momentum = priceData[priceData.length - 1] - priceData[priceData.length - 4];
-      const momChange = (priceData[priceData.length - 1] - priceData[priceData.length - 3]) / priceData[priceData.length - 3] * 100;
+      // Momentum très sensible (1 prix)
+      const momentum = priceData[priceData.length - 1] - priceData[priceData.length - 2];
+      const momentumPercent = (momentum / priceData[priceData.length - 2]) * 100;
 
       let action = 'HOLD';
-      let baseQ = 20; // Quality score de base
+      let baseQ = 15;
 
-      // Signal BUY/SELL plus sensible
+      // Signal ultra-sensible
       if (emaFast > emaSlow) {
         action = 'BUY';
-        baseQ = 40;
+        baseQ = 35;
       } else if (emaFast < emaSlow) {
         action = 'SELL';
-        baseQ = 40;
+        baseQ = 35;
       }
 
-      // Boost si momentum positif
+      // Boost momentum (même micro)
       if (momentum > 0) {
-        baseQ += Math.min(30, Math.abs(momentum) * 5);
+        baseQ += Math.min(40, Math.abs(momentum) * 100);
       }
 
-      // Boost si spread EMA large
+      // Boost spread EMA
       const emaSpread = Math.abs(emaFast - emaSlow) / emaSlow * 100;
-      if (emaSpread > 0.1) {
-        baseQ += Math.min(20, emaSpread * 20);
+      if (emaSpread > 0.05) {
+        baseQ += Math.min(25, emaSpread * 30);
       }
 
       const q = Math.min(100, Math.max(0, baseQ));
@@ -45,7 +45,7 @@ class StrategyAgent {
         q: parseFloat(q.toFixed(2)),
         emaFast: parseFloat(emaFast.toFixed(2)),
         emaSlow: parseFloat(emaSlow.toFixed(2)),
-        momentum: parseFloat(momentum.toFixed(6))
+        momentum: parseFloat(momentum.toFixed(8))
       };
     } catch(e) {
       console.error(`StrategyAgent.analyze error: ${e.message}`);
@@ -67,7 +67,7 @@ class StrategyAgent {
 class RiskAgent {
   validate(signal, portfolio) {
     if (!signal || !portfolio) {
-      return { approved: false, leverage: 1, stopLoss: 0.015, takeProfit: 0.02 };
+      return { approved: false, leverage: 1, stopLoss: 0.01, takeProfit: 0.02 };
     }
 
     let leverage = 3;
@@ -75,14 +75,13 @@ class RiskAgent {
     else if (signal.q >= 50) leverage = 7;
     else if (signal.q >= 35) leverage = 5;
 
-    // Approuve si signal fort (Q >= 30)
-    const approved = signal.action !== 'HOLD' && signal.q >= 30;
+    const approved = signal.action === 'BUY' && signal.q >= 20;
 
     return {
       approved,
       leverage,
-      stopLoss: 0.015,
-      takeProfit: 0.02
+      stopLoss: 0.01, // -1%
+      takeProfit: 0.02 // +2%
     };
   }
 }
@@ -92,7 +91,6 @@ class LearningAgent {
     this.totalTrades = 0;
     this.wins = 0;
     this.losses = 0;
-    this.patterns = {};
   }
 
   learn(tradeOutcome) {
@@ -100,11 +98,6 @@ class LearningAgent {
     this.totalTrades++;
     if (tradeOutcome.pnl > 0) this.wins++;
     else this.losses++;
-
-    const key = `q_${Math.floor(tradeOutcome.q / 10)}_lev_${tradeOutcome.leverage}`;
-    if (!this.patterns[key]) this.patterns[key] = { trades: 0, wins: 0 };
-    this.patterns[key].trades++;
-    if (tradeOutcome.pnl > 0) this.patterns[key].wins++;
   }
 
   getStats() {
