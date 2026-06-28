@@ -59,10 +59,10 @@ class TradingEngine {
       try {
         const sig = this.swarm.coordinate(this.priceHistory, { capital: this.capital, trades: this.openTrades });
         
-        console.log(`💹 ${this.config.asset}: $${price.toFixed(2)} | Signal: ${sig.action} | Q:${Math.floor(sig.q)} | EMA Fast:${sig.emaFast.toFixed(2)} Slow:${sig.emaSlow.toFixed(2)}`);
+        console.log(`💹 ${this.config.asset}: $${price.toFixed(2)} | Signal: ${sig.action} | Q:${Math.floor(sig.q)} | EMA Fast:${sig.emaFast.toFixed(2)} Slow:${sig.emaSlow.toFixed(2)} | Momentum:${sig.momentum.toFixed(6)}`);
 
-        // Simulation: Ouvre trade si signal fort (Q >= 35)
-        if (sig.action === 'BUY' && sig.q >= 35 && this.openTrades.length === 0) {
+        // Simulation: Ouvre trade si signal fort (Q >= 20) - THRESHOLD BAISSÉ
+        if (sig.action === 'BUY' && sig.q >= 20 && this.openTrades.length === 0) {
           const stake = Math.round(this.capital * 0.08);
           const qty = stake / price;
           const trade = {
@@ -77,7 +77,7 @@ class TradingEngine {
             quality: sig.q
           };
           this.openTrades.push(trade);
-          console.log(`🎯 TRADE OPENED | Entry: $${price.toFixed(2)} | Q:${Math.floor(sig.q)}`);
+          console.log(`🎯 TRADE OPENED | Entry: $${price.toFixed(2)} | Q:${Math.floor(sig.q)} | SL: $${trade.sl.toFixed(2)} | TP: $${trade.tp.toFixed(2)}`);
         }
 
         // Gère les trades ouverts (SL/TP)
@@ -87,14 +87,14 @@ class TradingEngine {
               const pnl = (trade.sl - trade.entry) * trade.qty;
               this.closedTrades.push({...trade, exit: trade.sl, closeTime: Date.now(), pnl, status: 'SL'});
               this.capital += pnl;
-              console.log(`❌ STOP LOSS | PnL: $${pnl.toFixed(2)}`);
+              console.log(`❌ STOP LOSS HIT | Exit: $${trade.sl.toFixed(2)} | PnL: $${pnl.toFixed(2)}`);
               return false;
             }
             if (price >= trade.tp) {
               const pnl = (trade.tp - trade.entry) * trade.qty;
               this.closedTrades.push({...trade, exit: trade.tp, closeTime: Date.now(), pnl, status: 'TP'});
               this.capital += pnl;
-              console.log(`✅ TAKE PROFIT | PnL: $${pnl.toFixed(2)}`);
+              console.log(`✅ TAKE PROFIT HIT | Exit: $${trade.tp.toFixed(2)} | PnL: $${pnl.toFixed(2)}`);
               return false;
             }
           }
