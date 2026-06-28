@@ -1,5 +1,5 @@
 // ruflo-trader.js
-// Agents Ruflo pour stratégie de trading EMA adaptatif
+// Agents Ruflo pour stratégie de trading EMA adaptatif (Version agressif)
 
 class StrategyAgent {
   analyze(priceData) {
@@ -10,30 +10,42 @@ class StrategyAgent {
 
       const emaFast = this.calcEMA(priceData, 8);
       const emaSlow = this.calcEMA(priceData, 21);
-      const momentum = priceData[priceData.length - 1] - priceData[Math.max(0, priceData.length - 5)];
+      
+      // Momentum sur 3 derniers prix (plus sensible)
+      const momentum = priceData[priceData.length - 1] - priceData[priceData.length - 4];
+      const momChange = (priceData[priceData.length - 1] - priceData[priceData.length - 3]) / priceData[priceData.length - 3] * 100;
 
       let action = 'HOLD';
-      let momScore = Math.min(50, Math.abs(momentum) * 10);
-      let emaScore = 0;
+      let baseQ = 20; // Quality score de base
 
-      if (emaFast > emaSlow && momentum > 0) {
+      // Signal BUY/SELL plus sensible
+      if (emaFast > emaSlow) {
         action = 'BUY';
-        emaScore = 30;
-        momScore = 50;
-      } else if (emaFast < emaSlow && momentum < 0) {
+        baseQ = 40;
+      } else if (emaFast < emaSlow) {
         action = 'SELL';
-        emaScore = 30;
-        momScore = 50;
+        baseQ = 40;
       }
 
-      const q = Math.min(100, momScore + emaScore);
+      // Boost si momentum positif
+      if (momentum > 0) {
+        baseQ += Math.min(30, Math.abs(momentum) * 5);
+      }
+
+      // Boost si spread EMA large
+      const emaSpread = Math.abs(emaFast - emaSlow) / emaSlow * 100;
+      if (emaSpread > 0.1) {
+        baseQ += Math.min(20, emaSpread * 20);
+      }
+
+      const q = Math.min(100, Math.max(0, baseQ));
 
       return {
         action,
-        q,
+        q: parseFloat(q.toFixed(2)),
         emaFast: parseFloat(emaFast.toFixed(2)),
         emaSlow: parseFloat(emaSlow.toFixed(2)),
-        momentum: parseFloat(momentum.toFixed(2))
+        momentum: parseFloat(momentum.toFixed(6))
       };
     } catch(e) {
       console.error(`StrategyAgent.analyze error: ${e.message}`);
@@ -60,10 +72,14 @@ class RiskAgent {
 
     let leverage = 3;
     if (signal.q >= 70) leverage = 12;
-    else if (signal.q >= 45) leverage = 7;
+    else if (signal.q >= 50) leverage = 7;
+    else if (signal.q >= 35) leverage = 5;
+
+    // Approuve si signal fort (Q >= 30)
+    const approved = signal.action !== 'HOLD' && signal.q >= 30;
 
     return {
-      approved: signal.action !== 'HOLD' && signal.q >= 40,
+      approved,
       leverage,
       stopLoss: 0.015,
       takeProfit: 0.02
@@ -120,13 +136,13 @@ class TradingSwarm {
       stopLoss: risk.stopLoss,
       takeProfit: risk.takeProfit,
       emaFast: sig.emaFast,
-      emaSlow: sig.emaSlow
+      emaSlow: sig.emaSlow,
+      momentum: sig.momentum
     };
   }
 
   recordOutcomes(trades, currentPrice) {
     if (!trades || trades.length === 0) return;
-    // Simplifié : update learning agent
   }
 
   getStats() {
