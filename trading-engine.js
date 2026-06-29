@@ -7,76 +7,16 @@ const BASE_URL = 'testnet.binancefuture.com';
 const TAKER_FEE = 0.0004;
 
 const SYMBOLS = [
-  {
-    symbol: 'BTCUSDT',  precision: 3, minQty: 0.001,
-    tp: 0.008, sl: 0.004,
-    tpNormal: 0.012, slNormal: 0.006,
-    tpVolatile: 0.020, slVolatile: 0.010,
-    minATR: 0.08, label: '🟠BTC'
-  },
-  {
-    symbol: 'ETHUSDT',  precision: 3, minQty: 0.001,
-    tp: 0.010, sl: 0.005,
-    tpNormal: 0.015, slNormal: 0.007,
-    tpVolatile: 0.025, slVolatile: 0.012,
-    minATR: 0.10, label: '🔵ETH'
-  },
-  {
-    symbol: 'SOLUSDT',  precision: 1, minQty: 0.1,
-    tp: 0.012, sl: 0.006,
-    tpNormal: 0.018, slNormal: 0.009,
-    tpVolatile: 0.030, slVolatile: 0.015,
-    minATR: 0.12, label: '🟣SOL'
-  },
-  {
-    symbol: 'BNBUSDT',  precision: 2, minQty: 0.01,
-    tp: 0.010, sl: 0.005,
-    tpNormal: 0.015, slNormal: 0.007,
-    tpVolatile: 0.025, slVolatile: 0.012,
-    minATR: 0.10, label: '🟡BNB'
-  },
-  {
-    symbol: 'XRPUSDT',  precision: 0, minQty: 1,
-    tp: 0.012, sl: 0.006,
-    tpNormal: 0.018, slNormal: 0.009,
-    tpVolatile: 0.030, slVolatile: 0.015,
-    minATR: 0.12, label: '🔵XRP'
-  },
-  {
-    symbol: 'DOGEUSDT', precision: 0, minQty: 1,
-    tp: 0.015, sl: 0.007,
-    tpNormal: 0.022, slNormal: 0.011,
-    tpVolatile: 0.035, slVolatile: 0.017,
-    minATR: 0.15, label: '🐶DOGE'
-  },
-  {
-    symbol: 'ADAUSDT',  precision: 0, minQty: 1,
-    tp: 0.012, sl: 0.006,
-    tpNormal: 0.018, slNormal: 0.009,
-    tpVolatile: 0.030, slVolatile: 0.015,
-    minATR: 0.12, label: '🔵ADA'
-  },
-  {
-    symbol: 'DOTUSDT',  precision: 1, minQty: 0.1,
-    tp: 0.013, sl: 0.006,
-    tpNormal: 0.020, slNormal: 0.010,
-    tpVolatile: 0.032, slVolatile: 0.016,
-    minATR: 0.13, label: '⚪DOT'
-  },
-  {
-    symbol: 'LINKUSDT', precision: 1, minQty: 0.1,
-    tp: 0.015, sl: 0.007,
-    tpNormal: 0.022, slNormal: 0.011,
-    tpVolatile: 0.035, slVolatile: 0.017,
-    minATR: 0.15, label: '🔵LINK'
-  },
-  {
-    symbol: 'LTCUSDT',  precision: 3, minQty: 0.001,
-    tp: 0.010, sl: 0.005,
-    tpNormal: 0.015, slNormal: 0.007,
-    tpVolatile: 0.025, slVolatile: 0.012,
-    minATR: 0.10, label: '⚫LTC'
-  }
+  { symbol: 'BTCUSDT',  precision: 3, minQty: 0.001, label: '🟠BTC'  },
+  { symbol: 'ETHUSDT',  precision: 3, minQty: 0.001, label: '🔵ETH'  },
+  { symbol: 'SOLUSDT',  precision: 1, minQty: 0.1,   label: '🟣SOL'  },
+  { symbol: 'BNBUSDT',  precision: 2, minQty: 0.01,  label: '🟡BNB'  },
+  { symbol: 'XRPUSDT',  precision: 0, minQty: 1,     label: '🔵XRP'  },
+  { symbol: 'DOGEUSDT', precision: 0, minQty: 1,     label: '🐶DOGE' },
+  { symbol: 'ADAUSDT',  precision: 0, minQty: 1,     label: '🔵ADA'  },
+  { symbol: 'DOTUSDT',  precision: 1, minQty: 0.1,   label: '⚪DOT'  },
+  { symbol: 'LINKUSDT', precision: 1, minQty: 0.1,   label: '🔵LINK' },
+  { symbol: 'LTCUSDT',  precision: 3, minQty: 0.001, label: '⚫LTC'  }
 ];
 
 class SymbolBot {
@@ -85,10 +25,9 @@ class SymbolBot {
     this.symbolConfig = symbolConfig;
     this.precision = symbolConfig.precision;
     this.minQty = symbolConfig.minQty;
-    this.minATR = symbolConfig.minATR || 0.08;
     this.label = symbolConfig.label || symbolConfig.symbol;
     this.engine = engine;
-    this.swarm = new TradingSwarm(symbolConfig);
+    this.swarm = new TradingSwarm();
     this.mtf = new MultiTimeframeAnalyzer(this.symbol);
     this.priceHistory = [];
     this.currentPrice = 0;
@@ -97,25 +36,23 @@ class SymbolBot {
     this.lastMTFTime = 0;
     this.lastATRTime = 0;
     this.currentMarketMode = 'CALM';
-    this.currentATR = 0;         // ATR ticks locaux
-    this.currentATRKlines = 0;   // ✅ ATR klines Binance 1min
+    this.currentATRKlines = 0;
     this.MTF_REFRESH_MS = 60000;
-    this.ATR_REFRESH_MS = 30000; // ✅ Refresh ATR klines toutes les 30s
+    this.ATR_REFRESH_MS = 30000;
 
-    this.TIMEOUT_CALM     = 45000;
-    this.TIMEOUT_NORMAL   = 60000;
-    this.TIMEOUT_VOLATILE = 120000;
+    // ✅ Timeout fixe 2 minutes
+    this.TRADE_TIMEOUT_MS = 120000;
 
-    this.STOP_RAPID_CALM     = 3.00;
-    this.STOP_RAPID_NORMAL   = 5.00;
-    this.STOP_RAPID_VOLATILE = 8.00;
+    // ✅ Profit minimum pour fermeture timeout
+    this.MIN_NET_PROFIT = 0.50; // $0.50 minimum net
 
-    this.TRAIL_AFTER_TP_PCT = 0.005;
+    // ✅ Trailing SL après TP
+    this.TRAIL_AFTER_TP_PCT = 0.005; // -0.5% du pic
 
-    console.log(`⚙️  ${this.label} | minATR:${this.minATR}%`);
+    console.log(`⚙️  ${this.label}`);
   }
 
-  // ✅ Fetch ATR depuis klines Binance 1min (vraie volatilité)
+  // ✅ ATR réel depuis klines 1min Binance
   async fetchATRFromKlines() {
     try {
       const data = await new Promise((resolve, reject) => {
@@ -131,25 +68,17 @@ class SymbolBot {
 
       if (!Array.isArray(data) || data.length < 14) return 0;
 
-      // True Range pour chaque bougie
       const trueRanges = [];
       for (let i = 1; i < data.length; i++) {
-        const high  = parseFloat(data[i][2]);
-        const low   = parseFloat(data[i][3]);
+        const high = parseFloat(data[i][2]);
+        const low  = parseFloat(data[i][3]);
         const prevClose = parseFloat(data[i-1][4]);
-        const tr = Math.max(
-          high - low,
-          Math.abs(high - prevClose),
-          Math.abs(low - prevClose)
-        );
+        const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
         trueRanges.push(tr);
       }
 
-      // ATR = moyenne des 14 derniers True Ranges
       const atr14 = trueRanges.slice(-14).reduce((a,b) => a+b, 0) / 14;
       const lastClose = parseFloat(data[data.length-1][4]);
-
-      // ATR en % du prix
       return parseFloat(((atr14 / lastClose) * 100).toFixed(4));
     } catch(e) {
       console.error(`❌ ${this.label} fetchATR: ${e.message}`);
@@ -157,24 +86,12 @@ class SymbolBot {
     }
   }
 
-  // ✅ Mode marché basé sur ATR klines
+  // ✅ Mode marché selon ATR klines
   getMarketModeFromATR(atrPct) {
-    if (atrPct > 1.5)  return 'EXTREME';
-    if (atrPct > 0.8)  return 'VOLATILE';
-    if (atrPct > 0.3)  return 'NORMAL';
+    if (atrPct > 1.5) return 'EXTREME';
+    if (atrPct > 0.8) return 'VOLATILE';
+    if (atrPct > 0.3) return 'NORMAL';
     return 'CALM';
-  }
-
-  getTimeout() {
-    if (this.currentMarketMode === 'VOLATILE') return this.TIMEOUT_VOLATILE;
-    if (this.currentMarketMode === 'NORMAL')   return this.TIMEOUT_NORMAL;
-    return this.TIMEOUT_CALM;
-  }
-
-  getStopRapid() {
-    if (this.currentMarketMode === 'VOLATILE') return this.STOP_RAPID_VOLATILE;
-    if (this.currentMarketMode === 'NORMAL')   return this.STOP_RAPID_NORMAL;
-    return this.STOP_RAPID_CALM;
   }
 
   async fetchPrice() {
@@ -244,8 +161,6 @@ class SymbolBot {
       const now = Date.now();
       const tradeAge = now - this.openTrade.openTime;
       const isLong = this.openTrade.direction === 'LONG';
-      const timeout = this.getTimeout();
-      const stopRapid = this.getStopRapid();
 
       const grossPnL = isLong
         ? (price - this.openTrade.entry) * this.openTrade.qty
@@ -256,72 +171,73 @@ class SymbolBot {
         ? (price - this.openTrade.entry) / this.openTrade.entry
         : (this.openTrade.entry - price) / this.openTrade.entry;
 
-      // ✅ STOP RAPIDE après 45s
-      if (tradeAge > 45000 && estNet < -stopRapid) {
-        console.log(`🛑 ${this.label} STOP RAPIDE | -$${Math.abs(estNet).toFixed(2)}`);
-        await this.forceClose(price, `STOP RAPIDE -$${Math.abs(estNet).toFixed(2)}`);
-        return true;
-      }
-
-      // ✅ RETOURNEMENT signal opposé + perte > $0.50
+      // ✅ RETOURNEMENT : signal opposé fort + perte
       if (sig && estNet < -0.50) {
-        if (isLong && sig.action === 'SELL' && sig.q >= 65) {
-          console.log(`🔄 ${this.label} RETOURNEMENT LONG→SHORT`);
+        if (isLong && sig.action === 'SELL' && sig.q >= 70) {
+          console.log(`🔄 ${this.label} RETOURNEMENT LONG→SHORT | -$${Math.abs(estNet).toFixed(2)}`);
           await this.forceClose(price, `RETOURNEMENT→SHORT`);
           return 'REVERSE_SHORT';
         }
-        if (!isLong && sig.action === 'BUY' && sig.q >= 65) {
-          console.log(`🔄 ${this.label} RETOURNEMENT SHORT→LONG`);
+        if (!isLong && sig.action === 'BUY' && sig.q >= 70) {
+          console.log(`🔄 ${this.label} RETOURNEMENT SHORT→LONG | -$${Math.abs(estNet).toFixed(2)}`);
           await this.forceClose(price, `RETOURNEMENT→LONG`);
           return 'REVERSE_LONG';
         }
       }
 
-      // ✅ TRAILING SL uniquement après TP atteint
-      const tpPct = this.openTrade.tpPct || 0.008;
+      // ✅ TRAILING SL uniquement après TP +2% atteint
+      const tpPct = this.openTrade.tpPct || 0.020;
       const tpAtteint = pricePctFromEntry >= tpPct;
 
       if (tpAtteint && !this.openTrade.tpReached) {
         this.openTrade.tpReached = true;
         this.openTrade.highPrice = price;
         this.openTrade.lowPrice = price;
-        console.log(`🎯 ${this.label} TP +${(pricePctFromEntry*100).toFixed(2)}% | Trail -0.5% activé`);
+        console.log(`🎯 ${this.label} TP +${(pricePctFromEntry*100).toFixed(2)}% ATTEINT | Trail -0.5% activé | Laisse courir !`);
       }
 
       if (this.openTrade.tpReached) {
         if (isLong) {
-          if (price > this.openTrade.highPrice) this.openTrade.highPrice = price;
+          // ✅ Mise à jour pic uniquement si monte
+          if (price > this.openTrade.highPrice) {
+            this.openTrade.highPrice = price;
+          }
+          // ✅ Trail -0.5% du pic, ne descend JAMAIS
           const newSL = parseFloat((this.openTrade.highPrice * (1 - this.TRAIL_AFTER_TP_PCT)).toFixed(2));
           if (newSL > this.openTrade.sl) {
             this.openTrade.sl = newSL;
-            console.log(`📈 ${this.label} TRAIL → $${newSL.toFixed(2)}`);
+            console.log(`📈 ${this.label} TRAIL SL → $${newSL.toFixed(2)} (pic:$${this.openTrade.highPrice.toFixed(2)})`);
           }
           if (price <= this.openTrade.sl) {
-            await this.forceClose(price, `TRAIL SL`);
+            await this.forceClose(price, `TRAIL SL déclenché`);
             return false;
           }
         } else {
-          if (price < this.openTrade.lowPrice) this.openTrade.lowPrice = price;
+          if (price < this.openTrade.lowPrice) {
+            this.openTrade.lowPrice = price;
+          }
           const newSL = parseFloat((this.openTrade.lowPrice * (1 + this.TRAIL_AFTER_TP_PCT)).toFixed(2));
           if (newSL < this.openTrade.sl) {
             this.openTrade.sl = newSL;
-            console.log(`📉 ${this.label} SHORT TRAIL → $${newSL.toFixed(2)}`);
+            console.log(`📉 ${this.label} SHORT TRAIL SL → $${newSL.toFixed(2)}`);
           }
           if (price >= this.openTrade.sl) {
-            await this.forceClose(price, `SHORT TRAIL SL`);
+            await this.forceClose(price, `SHORT TRAIL SL déclenché`);
             return false;
           }
         }
       }
 
-      // ✅ Timeout adaptatif
-      if (tradeAge >= timeout) {
-        if (estNet > 0) {
-          await this.forceClose(price, `${Math.floor(timeout/1000)}s + profit +$${estNet.toFixed(2)}`);
-        } else if (Math.abs(estNet) < 1.00) {
-          await this.forceClose(price, `${Math.floor(timeout/1000)}s perte légère`);
+      // ✅ TIMEOUT 2min :
+      // → Ferme si net >= $0.50 (minimum profit)
+      // → Ne ferme PAS si en perte → attend SL Binance
+      if (tradeAge >= this.TRADE_TIMEOUT_MS) {
+        if (estNet >= this.MIN_NET_PROFIT) {
+          await this.forceClose(price, `2min + NET +$${estNet.toFixed(2)} >= $${this.MIN_NET_PROFIT}`);
+        } else if (estNet > 0 && estNet < this.MIN_NET_PROFIT) {
+          console.log(`⏳ ${this.label} 2min | Profit +$${estNet.toFixed(2)} < $${this.MIN_NET_PROFIT} min | Attend TP`);
         } else {
-          console.log(`⏳ ${this.label} Timeout perte lourde | Attend SL Binance`);
+          console.log(`⏳ ${this.label} 2min | Perte -$${Math.abs(estNet).toFixed(2)} | Attend SL Binance`);
         }
         return false;
       }
@@ -359,10 +275,10 @@ class SymbolBot {
         this.openTrade = null;
       } else if (active) {
         const unrealPnL = parseFloat(active.unRealizedProfit || 0);
-        const remaining = Math.max(0, timeout - tradeAge);
-        const tpIcon = this.openTrade.tpReached ? '🎯TRAIL' : `TP@${(tpPct*100).toFixed(1)}%`;
+        const remaining = Math.max(0, this.TRADE_TIMEOUT_MS - tradeAge);
+        const tpIcon = this.openTrade.tpReached ? '🎯TRAIL' : `TP@2%`;
         const modeIcon = this.currentMarketMode === 'VOLATILE' ? '🚀' : this.currentMarketMode === 'NORMAL' ? '🟢' : '🟡';
-        console.log(`🔄 ${this.label} ${isLong ? '📈' : '📉'} ${tpIcon} | Gross:${unrealPnL >= 0 ? '+' : ''}$${unrealPnL.toFixed(2)} | Net:${estNet >= 0 ? '+' : ''}$${estNet.toFixed(2)} | ${modeIcon}ATR:${this.currentATRKlines.toFixed(3)}% | ${Math.floor(remaining/1000)}s`);
+        console.log(`🔄 ${this.label} ${isLong ? '📈' : '📉'} ${tpIcon} | Gross:${unrealPnL >= 0 ? '+' : ''}$${unrealPnL.toFixed(2)} | Net:${estNet >= 0 ? '+' : ''}$${estNet.toFixed(2)} | ${modeIcon}${this.currentMarketMode} | ${Math.floor(remaining/1000)}s`);
       }
       return false;
     } catch(e) {
@@ -374,13 +290,14 @@ class SymbolBot {
   async placeOrder(price, sig, mtfScore) {
     try {
       const stake = this.engine.getStake();
-      const lev = sig.leverage || 5;
-      const tpPct = sig.tp || this.symbolConfig.tp;
-      const slPct = sig.sl || this.symbolConfig.sl;
+      const lev = sig.leverage || 7;
+      const tpPct = 0.020; // ✅ Toujours +2%
+      const slPct = 0.010; // ✅ Toujours -1%
       const isLong = sig.direction === 'LONG';
       const side = isLong ? 'BUY' : 'SELL';
       const closeSide = isLong ? 'SELL' : 'BUY';
 
+      // Anti corrélation
       if (isLong) {
         const bearAssets = this.engine.bots.filter(b => b.symbol !== this.symbol).filter(b => b.mtf?.lastAnalysis?.bias === 'BEAR').length;
         if (bearAssets >= 7) { console.log(`⛔ ${this.label} LONG bloqué`); return; }
@@ -417,6 +334,10 @@ class SymbolBot {
           stopPrice: tp, closePosition: 'true'
         });
 
+        // ✅ Calcul fees estimées pour info
+        const estFees = this.calcFees(price, tp, qty);
+        const estNetTP = (tp - price) * qty * (isLong ? 1 : -1) - estFees;
+
         this.openTrade = {
           id: order.orderId, symbol: this.symbol,
           entry: price, qty, stake, sl, tp,
@@ -424,7 +345,8 @@ class SymbolBot {
           direction: sig.direction,
           tpReached: false,
           openTime: Date.now(), leverage: lev,
-          mtfScore, q: sig.q, tpPct, slPct,
+          mtfScore, q: sig.q,
+          tpPct, slPct,
           marketMode: this.currentMarketMode
         };
 
@@ -433,7 +355,7 @@ class SymbolBot {
         this.engine.openTrades.push(this.openTrade);
 
         const modeIcon = this.currentMarketMode === 'VOLATILE' ? '🚀' : this.currentMarketMode === 'NORMAL' ? '🟢' : '🟡';
-        console.log(`✅ #${this.engine.tradeCount} ${isLong ? '📈' : '📉'} ${this.label} | $${price} | Q:${sig.q.toFixed(0)} | Lev:${lev}x | TP:+${(tpPct*100).toFixed(1)}% | SL:-${(slPct*100).toFixed(1)}% | ${modeIcon}${this.currentMarketMode}(ATR:${this.currentATRKlines.toFixed(3)}%) | Mise:$${stake}`);
+        console.log(`✅ #${this.engine.tradeCount} ${isLong ? '📈LONG' : '📉SHORT'} ${this.label} | $${price} | Q:${sig.q.toFixed(0)} | Lev:${lev}x | TP:+2%($${tp}) | SL:-1%($${sl}) | ${modeIcon}${this.currentMarketMode}(ATR:${this.currentATRKlines.toFixed(3)}%) | Mise:$${stake} | NET si TP:+$${estNetTP.toFixed(2)}`);
       } else {
         console.error(`❌ ${this.label} rejeté: ${JSON.stringify(order)}`);
       }
@@ -460,7 +382,7 @@ class SymbolBot {
       this.currentMarketMode = this.getMarketModeFromATR(this.currentATRKlines);
       this.lastATRTime = now;
       const modeIcon = this.currentMarketMode === 'VOLATILE' ? '🚀' : this.currentMarketMode === 'NORMAL' ? '🟢' : this.currentMarketMode === 'EXTREME' ? '🔴' : '🟡';
-      console.log(`📊 ${this.label} ATR(1min):${this.currentATRKlines.toFixed(3)}% | ${modeIcon}${this.currentMarketMode} | min:${this.minATR}%`);
+      console.log(`📊 ${this.label} ATR(1min):${this.currentATRKlines.toFixed(3)}% | ${modeIcon}${this.currentMarketMode}`);
     }
 
     // ✅ MTF refresh
@@ -476,26 +398,10 @@ class SymbolBot {
       trades: this.engine.openTrades
     });
 
-    // ✅ TP/SL selon mode marché klines
-    if (this.currentMarketMode === 'VOLATILE') {
-      sig.tp = this.symbolConfig.tpVolatile;
-      sig.sl = this.symbolConfig.slVolatile;
-    } else if (this.currentMarketMode === 'NORMAL') {
-      sig.tp = this.symbolConfig.tpNormal;
-      sig.sl = this.symbolConfig.slNormal;
-    } else {
-      sig.tp = this.symbolConfig.tp;
-      sig.sl = this.symbolConfig.sl;
-    }
+    // ✅ Mode marché depuis ATR klines (pas ticks)
     sig.marketMode = this.currentMarketMode;
 
-    // ✅ Skip si ATR klines trop faible
-    if (this.currentATRKlines < this.minATR && !this.openTrade) {
-      console.log(`💤 ${this.label} ATR(1min):${this.currentATRKlines.toFixed(3)}% < min:${this.minATR}% | SKIP`);
-      return;
-    }
-
-    // ✅ Pause si EXTREME
+    // ✅ EXTREME → PAUSE
     if (this.currentMarketMode === 'EXTREME') {
       console.log(`🔴 ${this.label} EXTREME | PAUSE`);
       return;
@@ -507,7 +413,7 @@ class SymbolBot {
     const dirIcon = sig.direction === 'LONG' ? '📈' : sig.direction === 'SHORT' ? '📉' : '⏸️';
     console.log(`💹 ${this.label}: $${price.toFixed(2)} | Q:${sig.q.toFixed(0)} | RSI:${(sig.rsi||50).toFixed(0)} | ${dirIcon}${sig.action} | Lev:${sig.leverage}x | ${modeIcon}${this.currentMarketMode}(ATR:${this.currentATRKlines.toFixed(3)}%) | Pos:${this.openTrade ? this.openTrade.direction : '0'}`);
 
-    // ✅ Retournement
+    // ✅ Retournement immédiat
     if (reverseSignal === 'REVERSE_SHORT') {
       await this.placeOrder(price, { ...sig, action: 'SELL', direction: 'SHORT' }, mtfScore);
       return;
@@ -519,11 +425,12 @@ class SymbolBot {
 
     const timeSinceLast = now - this.lastOpenTime;
 
+    // ✅ Gap 12s minimum = max 5 trades/min par asset
     if (
       (sig.action === 'BUY' || sig.action === 'SELL') &&
-      sig.q >= 65 &&
+      sig.q >= 70 &&
       !this.openTrade &&
-      timeSinceLast >= 4000 &&
+      timeSinceLast >= 12000 &&
       this.engine.config.apiKey
     ) {
       await this.placeOrder(price, sig, mtfScore);
@@ -555,7 +462,7 @@ class TradingEngine {
       50000: { toSave: 8000, newCapital: 42000, done: false }
     };
     this.pendingProfitTaking = null;
-    console.log(`⚙️  TradingEngine v13.0 ATR-KLINES | ${SYMBOLS.length} assets | Capital: $${this.capital}`);
+    console.log(`⚙️  TradingEngine v14.0 | ${SYMBOLS.length} assets | Capital: $${this.capital}`);
   }
 
   sign(params) {
@@ -589,16 +496,17 @@ class TradingEngine {
     });
   }
 
+  // ✅ Mise $345 de base
   getStake() {
     const cap = this.capital;
-    let base = 195, special = 325;
-    if (cap >= 80000)      { base = 8500;  special = 14000; }
-    else if (cap >= 40000) { base = 4500;  special = 7500;  }
-    else if (cap >= 20000) { base = 2500;  special = 4200;  }
-    else if (cap >= 12000) { base = 1400;  special = 2300;  }
-    else if (cap >= 8000)  { base = 750;   special = 1250;  }
-    else if (cap >= 4000)  { base = 390;   special = 650;   }
-    else                   { base = 195;   special = 325;   }
+    let base = 345, special = 550;
+    if (cap >= 80000)      { base = 9000;  special = 15000; }
+    else if (cap >= 40000) { base = 5000;  special = 8000;  }
+    else if (cap >= 20000) { base = 2800;  special = 4500;  }
+    else if (cap >= 12000) { base = 1600;  special = 2600;  }
+    else if (cap >= 8000)  { base = 900;   special = 1500;  }
+    else if (cap >= 4000)  { base = 500;   special = 800;   }
+    else                   { base = 345;   special = 550;   }
     if (this.tradeCount > 0 && this.tradeCount % 10 === 0) {
       console.log(`💥 TRADE SPÉCIAL (1/10) | Mise: $${special}`);
       return special;
@@ -643,12 +551,14 @@ class TradingEngine {
   async start() {
     if (this.running) return;
     this.running = true;
-    console.log(`🚀 BOT v13.0 ATR-KLINES | ${SYMBOLS.length} assets | Capital:$${this.capital}`);
-    console.log(`🎯 ATR réel sur klines 1min | Refresh 30s | Skip si marché mort`);
-    console.log(`🟡 CALM:     ATR 0-0.3%`);
-    console.log(`🟢 NORMAL:   ATR 0.3-0.8%`);
-    console.log(`🚀 VOLATILE: ATR 0.8-1.5%`);
-    console.log(`🔴 EXTREME:  ATR >1.5% → PAUSE`);
+    console.log(`🚀 BOT v14.0 | ${SYMBOLS.length} assets | Capital:$${this.capital}`);
+    console.log(`🎯 TP:+2% FIXE | SL:-1% FIXE | Trail après TP | Min profit:$0.50 | Gap:12s`);
+    console.log(`💰 Mise: $345 base | $550 spécial (1/10)`);
+    console.log(`📊 ATR klines 1min | CALM/NORMAL/VOLATILE/EXTREME`);
+    console.log(`🟡 CALM:     Trade normalement`);
+    console.log(`🟢 NORMAL:   Trade normalement`);
+    console.log(`🚀 VOLATILE: Trail SL plus agressif après TP`);
+    console.log(`🔴 EXTREME:  PAUSE total`);
     while (this.running) {
       try { await this.tick(); }
       catch(e) { console.error(`❌ Tick: ${e.message}`); }
@@ -660,7 +570,7 @@ class TradingEngine {
     this.running = false;
     const netPnL = this.closedTrades.reduce((s, t) => s + t.pnl, 0);
     const grossPnL = this.closedTrades.reduce((s, t) => s + (t.grossPnL || t.pnl), 0);
-    console.log(`⏸️  BOT v13.0 STOPPÉ`);
+    console.log(`⏸️  BOT v14.0 STOPPÉ`);
     console.log(`💰 Capital: $${this.capital.toFixed(2)}`);
     console.log(`📊 Gross: ${grossPnL >= 0 ? '+' : ''}$${grossPnL.toFixed(2)} | Fees: -$${this.totalFees.toFixed(2)} | NET: ${netPnL >= 0 ? '+' : ''}$${netPnL.toFixed(2)}`);
     console.log(`📈 ROI: ${((netPnL/this.startCapital)*100).toFixed(2)}%`);
@@ -684,8 +594,7 @@ class TradingEngine {
         bias: b.mtf.lastAnalysis?.bias || 'NEUTRAL',
         trends: b.mtf.lastAnalysis?.trends || {},
         marketMode: b.currentMarketMode || 'CALM',
-        atr: b.currentATRKlines || 0,
-        minATR: b.minATR || 0.08
+        atr: b.currentATRKlines || 0
       };
     });
     return {
@@ -702,7 +611,7 @@ class TradingEngine {
       running: this.running,
       currentStake: this.getStake(),
       tradeCount: this.tradeCount,
-      mode: 'BOT v13.0 ATR-KLINES',
+      mode: 'BOT v14.0',
       currentPrices, mtfScores,
       pendingProfitTaking: this.pendingProfitTaking
     };
