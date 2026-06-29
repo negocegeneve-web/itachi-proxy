@@ -6,38 +6,37 @@ const MultiTimeframeAnalyzer = require('./multi-timeframe');
 const BASE_URL = 'testnet.binancefuture.com';
 const TAKER_FEE = 0.0004;
 
-// ✅ Config spécifique par asset
 const SYMBOLS = [
   {
-    symbol: 'BTCUSDT', precision: 3, minQty: 0.001,
+    symbol: 'BTCUSDT',  precision: 3, minQty: 0.001,
     tp: 0.008, sl: 0.004,
     tpNormal: 0.012, slNormal: 0.006,
     tpVolatile: 0.020, slVolatile: 0.010,
     minATR: 0.08, label: '🟠BTC'
   },
   {
-    symbol: 'ETHUSDT', precision: 3, minQty: 0.001,
+    symbol: 'ETHUSDT',  precision: 3, minQty: 0.001,
     tp: 0.010, sl: 0.005,
     tpNormal: 0.015, slNormal: 0.007,
     tpVolatile: 0.025, slVolatile: 0.012,
     minATR: 0.10, label: '🔵ETH'
   },
   {
-    symbol: 'SOLUSDT', precision: 1, minQty: 0.1,
+    symbol: 'SOLUSDT',  precision: 1, minQty: 0.1,
     tp: 0.012, sl: 0.006,
     tpNormal: 0.018, slNormal: 0.009,
     tpVolatile: 0.030, slVolatile: 0.015,
     minATR: 0.12, label: '🟣SOL'
   },
   {
-    symbol: 'BNBUSDT', precision: 2, minQty: 0.01,
+    symbol: 'BNBUSDT',  precision: 2, minQty: 0.01,
     tp: 0.010, sl: 0.005,
     tpNormal: 0.015, slNormal: 0.007,
     tpVolatile: 0.025, slVolatile: 0.012,
     minATR: 0.10, label: '🟡BNB'
   },
   {
-    symbol: 'XRPUSDT', precision: 0, minQty: 1,
+    symbol: 'XRPUSDT',  precision: 0, minQty: 1,
     tp: 0.012, sl: 0.006,
     tpNormal: 0.018, slNormal: 0.009,
     tpVolatile: 0.030, slVolatile: 0.015,
@@ -51,14 +50,14 @@ const SYMBOLS = [
     minATR: 0.15, label: '🐶DOGE'
   },
   {
-    symbol: 'ADAUSDT', precision: 0, minQty: 1,
+    symbol: 'ADAUSDT',  precision: 0, minQty: 1,
     tp: 0.012, sl: 0.006,
     tpNormal: 0.018, slNormal: 0.009,
     tpVolatile: 0.030, slVolatile: 0.015,
     minATR: 0.12, label: '🔵ADA'
   },
   {
-    symbol: 'DOTUSDT', precision: 1, minQty: 0.1,
+    symbol: 'DOTUSDT',  precision: 1, minQty: 0.1,
     tp: 0.013, sl: 0.006,
     tpNormal: 0.020, slNormal: 0.010,
     tpVolatile: 0.032, slVolatile: 0.016,
@@ -72,7 +71,7 @@ const SYMBOLS = [
     minATR: 0.15, label: '🔵LINK'
   },
   {
-    symbol: 'LTCUSDT', precision: 3, minQty: 0.001,
+    symbol: 'LTCUSDT',  precision: 3, minQty: 0.001,
     tp: 0.010, sl: 0.005,
     tpNormal: 0.015, slNormal: 0.007,
     tpVolatile: 0.025, slVolatile: 0.012,
@@ -96,24 +95,74 @@ class SymbolBot {
     this.openTrade = null;
     this.lastOpenTime = 0;
     this.lastMTFTime = 0;
+    this.lastATRTime = 0;
     this.currentMarketMode = 'CALM';
-    this.currentATR = 0;
+    this.currentATR = 0;         // ATR ticks locaux
+    this.currentATRKlines = 0;   // ✅ ATR klines Binance 1min
     this.MTF_REFRESH_MS = 60000;
+    this.ATR_REFRESH_MS = 30000; // ✅ Refresh ATR klines toutes les 30s
 
-    // ✅ Timeouts adaptatifs
     this.TIMEOUT_CALM     = 45000;
     this.TIMEOUT_NORMAL   = 60000;
     this.TIMEOUT_VOLATILE = 120000;
 
-    // ✅ Stop rapide adaptatif
     this.STOP_RAPID_CALM     = 3.00;
     this.STOP_RAPID_NORMAL   = 5.00;
     this.STOP_RAPID_VOLATILE = 8.00;
 
-    // ✅ Trailing SL après TP uniquement
     this.TRAIL_AFTER_TP_PCT = 0.005;
 
     console.log(`⚙️  ${this.label} | minATR:${this.minATR}%`);
+  }
+
+  // ✅ Fetch ATR depuis klines Binance 1min (vraie volatilité)
+  async fetchATRFromKlines() {
+    try {
+      const data = await new Promise((resolve, reject) => {
+        https.get({
+          hostname: BASE_URL,
+          path: `/fapi/v1/klines?symbol=${this.symbol}&interval=1m&limit=20`
+        }, res => {
+          let body = '';
+          res.on('data', c => body += c);
+          res.on('end', () => { try { resolve(JSON.parse(body)); } catch(e) { reject(e); } });
+        }).on('error', reject);
+      });
+
+      if (!Array.isArray(data) || data.length < 14) return 0;
+
+      // True Range pour chaque bougie
+      const trueRanges = [];
+      for (let i = 1; i < data.length; i++) {
+        const high  = parseFloat(data[i][2]);
+        const low   = parseFloat(data[i][3]);
+        const prevClose = parseFloat(data[i-1][4]);
+        const tr = Math.max(
+          high - low,
+          Math.abs(high - prevClose),
+          Math.abs(low - prevClose)
+        );
+        trueRanges.push(tr);
+      }
+
+      // ATR = moyenne des 14 derniers True Ranges
+      const atr14 = trueRanges.slice(-14).reduce((a,b) => a+b, 0) / 14;
+      const lastClose = parseFloat(data[data.length-1][4]);
+
+      // ATR en % du prix
+      return parseFloat(((atr14 / lastClose) * 100).toFixed(4));
+    } catch(e) {
+      console.error(`❌ ${this.label} fetchATR: ${e.message}`);
+      return 0;
+    }
+  }
+
+  // ✅ Mode marché basé sur ATR klines
+  getMarketModeFromATR(atrPct) {
+    if (atrPct > 1.5)  return 'EXTREME';
+    if (atrPct > 0.8)  return 'VOLATILE';
+    if (atrPct > 0.3)  return 'NORMAL';
+    return 'CALM';
   }
 
   getTimeout() {
@@ -313,7 +362,7 @@ class SymbolBot {
         const remaining = Math.max(0, timeout - tradeAge);
         const tpIcon = this.openTrade.tpReached ? '🎯TRAIL' : `TP@${(tpPct*100).toFixed(1)}%`;
         const modeIcon = this.currentMarketMode === 'VOLATILE' ? '🚀' : this.currentMarketMode === 'NORMAL' ? '🟢' : '🟡';
-        console.log(`🔄 ${this.label} ${isLong ? '📈' : '📉'} ${tpIcon} | Gross:${unrealPnL >= 0 ? '+' : ''}$${unrealPnL.toFixed(2)} | Net:${estNet >= 0 ? '+' : ''}$${estNet.toFixed(2)} | ${modeIcon}ATR:${this.currentATR.toFixed(3)}% | ${Math.floor(remaining/1000)}s`);
+        console.log(`🔄 ${this.label} ${isLong ? '📈' : '📉'} ${tpIcon} | Gross:${unrealPnL >= 0 ? '+' : ''}$${unrealPnL.toFixed(2)} | Net:${estNet >= 0 ? '+' : ''}$${estNet.toFixed(2)} | ${modeIcon}ATR:${this.currentATRKlines.toFixed(3)}% | ${Math.floor(remaining/1000)}s`);
       }
       return false;
     } catch(e) {
@@ -332,7 +381,6 @@ class SymbolBot {
       const side = isLong ? 'BUY' : 'SELL';
       const closeSide = isLong ? 'SELL' : 'BUY';
 
-      // Anti corrélation
       if (isLong) {
         const bearAssets = this.engine.bots.filter(b => b.symbol !== this.symbol).filter(b => b.mtf?.lastAnalysis?.bias === 'BEAR').length;
         if (bearAssets >= 7) { console.log(`⛔ ${this.label} LONG bloqué`); return; }
@@ -377,15 +425,15 @@ class SymbolBot {
           tpReached: false,
           openTime: Date.now(), leverage: lev,
           mtfScore, q: sig.q, tpPct, slPct,
-          marketMode: sig.marketMode
+          marketMode: this.currentMarketMode
         };
 
         this.lastOpenTime = Date.now();
         this.engine.tradeCount++;
         this.engine.openTrades.push(this.openTrade);
 
-        const modeIcon = sig.marketMode === 'VOLATILE' ? '🚀' : sig.marketMode === 'NORMAL' ? '🟢' : '🟡';
-        console.log(`✅ #${this.engine.tradeCount} ${isLong ? '📈' : '📉'} ${this.label} | $${price} | Q:${sig.q.toFixed(0)} | Lev:${lev}x | TP:+${(tpPct*100).toFixed(1)}% | SL:-${(slPct*100).toFixed(1)}% | ${modeIcon}${sig.marketMode}(ATR:${this.currentATR.toFixed(3)}%) | Mise:$${stake}`);
+        const modeIcon = this.currentMarketMode === 'VOLATILE' ? '🚀' : this.currentMarketMode === 'NORMAL' ? '🟢' : '🟡';
+        console.log(`✅ #${this.engine.tradeCount} ${isLong ? '📈' : '📉'} ${this.label} | $${price} | Q:${sig.q.toFixed(0)} | Lev:${lev}x | TP:+${(tpPct*100).toFixed(1)}% | SL:-${(slPct*100).toFixed(1)}% | ${modeIcon}${this.currentMarketMode}(ATR:${this.currentATRKlines.toFixed(3)}%) | Mise:$${stake}`);
       } else {
         console.error(`❌ ${this.label} rejeté: ${JSON.stringify(order)}`);
       }
@@ -405,38 +453,61 @@ class SymbolBot {
     }
 
     const now = Date.now();
+
+    // ✅ Refresh ATR klines toutes les 30s
+    if (now - this.lastATRTime >= this.ATR_REFRESH_MS) {
+      this.currentATRKlines = await this.fetchATRFromKlines();
+      this.currentMarketMode = this.getMarketModeFromATR(this.currentATRKlines);
+      this.lastATRTime = now;
+      const modeIcon = this.currentMarketMode === 'VOLATILE' ? '🚀' : this.currentMarketMode === 'NORMAL' ? '🟢' : this.currentMarketMode === 'EXTREME' ? '🔴' : '🟡';
+      console.log(`📊 ${this.label} ATR(1min):${this.currentATRKlines.toFixed(3)}% | ${modeIcon}${this.currentMarketMode} | min:${this.minATR}%`);
+    }
+
+    // ✅ MTF refresh
     if (now - this.lastMTFTime >= this.MTF_REFRESH_MS) {
       await this.mtf.analyze(price);
       this.lastMTFTime = now;
     }
 
     const mtfScore = this.mtf.lastScore || 50;
+
     const sig = this.swarm.coordinate(this.priceHistory, {
       capital: this.engine.capital,
       trades: this.engine.openTrades
     });
 
-    this.currentMarketMode = sig.marketMode || 'CALM';
-    this.currentATR = sig.atr || 0;
+    // ✅ TP/SL selon mode marché klines
+    if (this.currentMarketMode === 'VOLATILE') {
+      sig.tp = this.symbolConfig.tpVolatile;
+      sig.sl = this.symbolConfig.slVolatile;
+    } else if (this.currentMarketMode === 'NORMAL') {
+      sig.tp = this.symbolConfig.tpNormal;
+      sig.sl = this.symbolConfig.slNormal;
+    } else {
+      sig.tp = this.symbolConfig.tp;
+      sig.sl = this.symbolConfig.sl;
+    }
+    sig.marketMode = this.currentMarketMode;
 
-    // ✅ Skip si ATR trop faible pour cet asset
-    if (this.currentATR < this.minATR && !this.openTrade) {
-      console.log(`💤 ${this.label} ATR:${this.currentATR.toFixed(3)}% < min:${this.minATR}% | MARCHÉ MORT | SKIP`);
+    // ✅ Skip si ATR klines trop faible
+    if (this.currentATRKlines < this.minATR && !this.openTrade) {
+      console.log(`💤 ${this.label} ATR(1min):${this.currentATRKlines.toFixed(3)}% < min:${this.minATR}% | SKIP`);
+      return;
+    }
+
+    // ✅ Pause si EXTREME
+    if (this.currentMarketMode === 'EXTREME') {
+      console.log(`🔴 ${this.label} EXTREME | PAUSE`);
       return;
     }
 
     const reverseSignal = await this.syncPosition(price, sig);
 
-    const modeIcon = sig.marketMode === 'VOLATILE' ? '🚀' : sig.marketMode === 'NORMAL' ? '🟢' : sig.marketMode === 'EXTREME' ? '🔴' : '🟡';
+    const modeIcon = this.currentMarketMode === 'VOLATILE' ? '🚀' : this.currentMarketMode === 'NORMAL' ? '🟢' : '🟡';
     const dirIcon = sig.direction === 'LONG' ? '📈' : sig.direction === 'SHORT' ? '📉' : '⏸️';
-    console.log(`💹 ${this.label}: $${price.toFixed(2)} | Q:${sig.q.toFixed(0)} | RSI:${(sig.rsi||50).toFixed(0)} | ${dirIcon}${sig.action} | Lev:${sig.leverage}x | ${modeIcon}${sig.marketMode}(ATR:${this.currentATR.toFixed(3)}%) | Pos:${this.openTrade ? this.openTrade.direction : '0'}`);
+    console.log(`💹 ${this.label}: $${price.toFixed(2)} | Q:${sig.q.toFixed(0)} | RSI:${(sig.rsi||50).toFixed(0)} | ${dirIcon}${sig.action} | Lev:${sig.leverage}x | ${modeIcon}${this.currentMarketMode}(ATR:${this.currentATRKlines.toFixed(3)}%) | Pos:${this.openTrade ? this.openTrade.direction : '0'}`);
 
-    if (sig.marketMode === 'EXTREME') {
-      console.log(`🔴 ${this.label} EXTREME | PAUSE`);
-      return;
-    }
-
-    // ✅ Retournement immédiat
+    // ✅ Retournement
     if (reverseSignal === 'REVERSE_SHORT') {
       await this.placeOrder(price, { ...sig, action: 'SELL', direction: 'SHORT' }, mtfScore);
       return;
@@ -484,7 +555,7 @@ class TradingEngine {
       50000: { toSave: 8000, newCapital: 42000, done: false }
     };
     this.pendingProfitTaking = null;
-    console.log(`⚙️  TradingEngine v12.0 SMART | ${SYMBOLS.length} assets | Capital: $${this.capital}`);
+    console.log(`⚙️  TradingEngine v13.0 ATR-KLINES | ${SYMBOLS.length} assets | Capital: $${this.capital}`);
   }
 
   sign(params) {
@@ -572,12 +643,12 @@ class TradingEngine {
   async start() {
     if (this.running) return;
     this.running = true;
-    console.log(`🚀 BOT v12.0 SMART | ${SYMBOLS.length} assets | Capital:$${this.capital}`);
-    console.log(`🎯 ATR minimum par asset | TP/SL spécifique | Trailing après TP | Retournement`);
-    console.log(`💤 Skip automatique si marché mort (ATR trop faible)`);
-    SYMBOLS.forEach(s => {
-      console.log(`  ${s.label} | minATR:${s.minATR}% | TP CALM:+${(s.tp*100).toFixed(1)}% | TP NORMAL:+${(s.tpNormal*100).toFixed(1)}% | TP VOLATILE:+${(s.tpVolatile*100).toFixed(1)}%`);
-    });
+    console.log(`🚀 BOT v13.0 ATR-KLINES | ${SYMBOLS.length} assets | Capital:$${this.capital}`);
+    console.log(`🎯 ATR réel sur klines 1min | Refresh 30s | Skip si marché mort`);
+    console.log(`🟡 CALM:     ATR 0-0.3%`);
+    console.log(`🟢 NORMAL:   ATR 0.3-0.8%`);
+    console.log(`🚀 VOLATILE: ATR 0.8-1.5%`);
+    console.log(`🔴 EXTREME:  ATR >1.5% → PAUSE`);
     while (this.running) {
       try { await this.tick(); }
       catch(e) { console.error(`❌ Tick: ${e.message}`); }
@@ -589,7 +660,7 @@ class TradingEngine {
     this.running = false;
     const netPnL = this.closedTrades.reduce((s, t) => s + t.pnl, 0);
     const grossPnL = this.closedTrades.reduce((s, t) => s + (t.grossPnL || t.pnl), 0);
-    console.log(`⏸️  BOT v12.0 STOPPÉ`);
+    console.log(`⏸️  BOT v13.0 STOPPÉ`);
     console.log(`💰 Capital: $${this.capital.toFixed(2)}`);
     console.log(`📊 Gross: ${grossPnL >= 0 ? '+' : ''}$${grossPnL.toFixed(2)} | Fees: -$${this.totalFees.toFixed(2)} | NET: ${netPnL >= 0 ? '+' : ''}$${netPnL.toFixed(2)}`);
     console.log(`📈 ROI: ${((netPnL/this.startCapital)*100).toFixed(2)}%`);
@@ -613,7 +684,7 @@ class TradingEngine {
         bias: b.mtf.lastAnalysis?.bias || 'NEUTRAL',
         trends: b.mtf.lastAnalysis?.trends || {},
         marketMode: b.currentMarketMode || 'CALM',
-        atr: b.currentATR || 0,
+        atr: b.currentATRKlines || 0,
         minATR: b.minATR || 0.08
       };
     });
@@ -631,7 +702,7 @@ class TradingEngine {
       running: this.running,
       currentStake: this.getStake(),
       tradeCount: this.tradeCount,
-      mode: 'BOT v12.0 SMART',
+      mode: 'BOT v13.0 ATR-KLINES',
       currentPrices, mtfScores,
       pendingProfitTaking: this.pendingProfitTaking
     };
