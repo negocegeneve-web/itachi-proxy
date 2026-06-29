@@ -41,13 +41,13 @@ class SymbolBot {
     this.TIMEOUT_NORMAL   = 60000;
     this.TIMEOUT_VOLATILE = 120000;
 
-    // ✅ Stop rapide adaptatif
-    this.STOP_RAPID_CALM     = 1.00;
-    this.STOP_RAPID_NORMAL   = 1.50;
-    this.STOP_RAPID_VOLATILE = 2.50;
+    // ✅ Stop rapide adaptatif — moins sensible
+    this.STOP_RAPID_CALM     = 3.00;
+    this.STOP_RAPID_NORMAL   = 5.00;
+    this.STOP_RAPID_VOLATILE = 8.00;
 
     // ✅ Trailing SL APRES TP atteint uniquement
-    this.TRAIL_AFTER_TP_PCT = 0.005; // -0.5% du pic après TP
+    this.TRAIL_AFTER_TP_PCT = 0.005;
 
     console.log(`⚙️  SymbolBot | ${this.symbol}`);
   }
@@ -143,8 +143,8 @@ class SymbolBot {
         ? (price - this.openTrade.entry) / this.openTrade.entry
         : (this.openTrade.entry - price) / this.openTrade.entry;
 
-      // ✅ STOP RAPIDE : perte nette > seuil après 15s
-      if (tradeAge > 15000 && estNet < -stopRapid) {
+      // ✅ STOP RAPIDE après 45s
+      if (tradeAge > 45000 && estNet < -stopRapid) {
         console.log(`🛑 ${this.symbol} STOP RAPIDE | -$${Math.abs(estNet).toFixed(2)} > $${stopRapid}`);
         await this.forceClose(price, `STOP RAPIDE -$${Math.abs(estNet).toFixed(2)}`);
         return true;
@@ -152,62 +152,63 @@ class SymbolBot {
 
       // ✅ RETOURNEMENT : signal opposé + perte > $0.30
       if (sig && estNet < -0.30) {
-        if (isLong && sig.action === 'SELL' && sig.q >= 50) {
+        if (isLong && sig.action === 'SELL' && sig.q >= 65) {
           console.log(`🔄 ${this.symbol} RETOURNEMENT LONG→SHORT | -$${Math.abs(estNet).toFixed(2)}`);
           await this.forceClose(price, `RETOURNEMENT→SHORT`);
           return 'REVERSE_SHORT';
         }
-        if (!isLong && sig.action === 'BUY' && sig.q >= 50) {
+        if (!isLong && sig.action === 'BUY' && sig.q >= 65) {
           console.log(`🔄 ${this.symbol} RETOURNEMENT SHORT→LONG | -$${Math.abs(estNet).toFixed(2)}`);
           await this.forceClose(price, `RETOURNEMENT→LONG`);
           return 'REVERSE_LONG';
         }
       }
 
-      // ✅ TRAILING SL : UNIQUEMENT après TP atteint
+      // ✅ TRAILING SL UNIQUEMENT après TP atteint
       const tpPct = this.openTrade.tpPct || 0.008;
       const tpAtteint = pricePctFromEntry >= tpPct;
 
       if (tpAtteint && !this.openTrade.tpReached) {
         this.openTrade.tpReached = true;
-        this.openTrade.highPrice = price; // Pic initial = prix au TP
-        console.log(`🎯 ${this.symbol} TP ATTEINT +${(pricePctFromEntry*100).toFixed(2)}% | Trailing SL activé`);
+        this.openTrade.highPrice = price;
+        this.openTrade.lowPrice = price;
+        console.log(`🎯 ${this.symbol} TP ATTEINT +${(pricePctFromEntry*100).toFixed(2)}% | Trailing SL -0.5% activé`);
       }
 
       if (this.openTrade.tpReached) {
         if (isLong) {
-          // ✅ Met à jour highPrice UNIQUEMENT si prix monte
-          if (price > (this.openTrade.highPrice || price)) {
+          // ✅ Mise à jour highPrice UNIQUEMENT si prix monte
+          if (price > this.openTrade.highPrice) {
             this.openTrade.highPrice = price;
           }
-          // ✅ Trailing SL = -0.5% du pic (ne descend JAMAIS)
+          // ✅ Trailing SL = -0.5% du pic, ne descend JAMAIS
           const newSL = parseFloat((this.openTrade.highPrice * (1 - this.TRAIL_AFTER_TP_PCT)).toFixed(2));
           if (newSL > this.openTrade.sl) {
             this.openTrade.sl = newSL;
-            console.log(`📈 ${this.symbol} TRAIL SL → $${newSL.toFixed(2)} (pic: $${this.openTrade.highPrice.toFixed(2)})`);
+            console.log(`📈 ${this.symbol} TRAIL SL → $${newSL.toFixed(2)} (pic:$${this.openTrade.highPrice.toFixed(2)})`);
           }
-          // ✅ Ferme si prix redescend sous le trailing SL
+          // ✅ Ferme si prix sous trailing SL
           if (price <= this.openTrade.sl) {
-            console.log(`🔒 ${this.symbol} TRAILING SL DÉCLENCHÉ | Prix $${price} <= SL $${this.openTrade.sl}`);
+            console.log(`🔒 ${this.symbol} TRAILING SL | $${price} <= $${this.openTrade.sl}`);
             await this.forceClose(price, `TRAILING SL après TP`);
             return false;
           }
         }
 
         if (!isLong) {
-          // ✅ Met à jour lowPrice UNIQUEMENT si prix baisse
-          if (price < (this.openTrade.lowPrice || price)) {
+          // ✅ Mise à jour lowPrice UNIQUEMENT si prix baisse
+          if (price < this.openTrade.lowPrice) {
             this.openTrade.lowPrice = price;
           }
           // ✅ Trailing SL SHORT = +0.5% du creux
           const newSL = parseFloat((this.openTrade.lowPrice * (1 + this.TRAIL_AFTER_TP_PCT)).toFixed(2));
           if (newSL < this.openTrade.sl) {
             this.openTrade.sl = newSL;
-            console.log(`📉 ${this.symbol} SHORT TRAIL SL → $${newSL.toFixed(2)} (creux: $${this.openTrade.lowPrice.toFixed(2)})`);
+            console.log(`📉 ${this.symbol} SHORT TRAIL SL → $${newSL.toFixed(2)} (creux:$${this.openTrade.lowPrice.toFixed(2)})`);
           }
-          // ✅ Ferme si prix remonte au-dessus trailing SL
+          // ✅ Ferme si prix au-dessus trailing SL
           if (price >= this.openTrade.sl) {
-            console.log(`🔒 ${this.symbol} SHORT TRAILING SL DÉCLENCHÉ | Prix $${price} >= SL $${this.openTrade.sl}`);
+            console.log(`🔒 ${this.symbol} SHORT TRAILING SL | $${price} >= $${this.openTrade.sl}`);
             await this.forceClose(price, `SHORT TRAILING SL après TP`);
             return false;
           }
@@ -323,7 +324,7 @@ class SymbolBot {
           highPrice: price,
           lowPrice: price,
           direction: sig.direction,
-          tpReached: false,  // ✅ TP pas encore atteint
+          tpReached: false,
           openTime: Date.now(), leverage: lev,
           mtfScore, q: sig.q, tpPct, slPct,
           marketMode: sig.marketMode
@@ -390,9 +391,11 @@ class SymbolBot {
     }
 
     const timeSinceLast = now - this.lastOpenTime;
+
+    // ✅ Q minimum 65
     if (
       (sig.action === 'BUY' || sig.action === 'SELL') &&
-      sig.q >= 50 &&
+      sig.q >= 65 &&
       !this.openTrade &&
       timeSinceLast >= 4000 &&
       this.engine.config.apiKey
@@ -426,7 +429,7 @@ class TradingEngine {
       50000: { toSave: 8000, newCapital: 42000, done: false }
     };
     this.pendingProfitTaking = null;
-    console.log(`⚙️  TradingEngine v11.0 FINAL | ${SYMBOLS.length} assets | Capital: $${this.capital}`);
+    console.log(`⚙️  TradingEngine v11.1 | ${SYMBOLS.length} assets | Capital: $${this.capital}`);
   }
 
   sign(params) {
@@ -514,11 +517,11 @@ class TradingEngine {
   async start() {
     if (this.running) return;
     this.running = true;
-    console.log(`🚀 BOT v11.0 FINAL | ${SYMBOLS.length} assets | Capital:$${this.capital}`);
-    console.log(`🎯 LONG+SHORT | ATR Adaptive | Trailing SL après TP | Stop Rapide | Retournement`);
-    console.log(`🟡 CALM:     TP+0.8% SL-0.4% Stop$1.0  Timeout45s`);
-    console.log(`🟢 NORMAL:   TP+1.5% SL-0.7% Stop$1.5  Timeout60s`);
-    console.log(`🚀 VOLATILE: TP+2.5% SL-1.0% Stop$2.5  Timeout120s`);
+    console.log(`🚀 BOT v11.1 | ${SYMBOLS.length} assets | Capital:$${this.capital}`);
+    console.log(`🎯 Q>=65 | LONG+SHORT | ATR Adaptive | Trailing SL après TP | Stop Rapide 45s`);
+    console.log(`🟡 CALM:     TP+0.8% SL-0.4% Stop$3.0  Timeout45s`);
+    console.log(`🟢 NORMAL:   TP+1.5% SL-0.7% Stop$5.0  Timeout60s`);
+    console.log(`🚀 VOLATILE: TP+2.5% SL-1.0% Stop$8.0  Timeout120s`);
     console.log(`📊 Assets: ${SYMBOLS.map(s => s.symbol).join(', ')}`);
     while (this.running) {
       try { await this.tick(); }
@@ -531,10 +534,10 @@ class TradingEngine {
     this.running = false;
     const netPnL = this.closedTrades.reduce((s, t) => s + t.pnl, 0);
     const grossPnL = this.closedTrades.reduce((s, t) => s + (t.grossPnL || t.pnl), 0);
-    console.log(`⏸️  BOT v11.0 STOPPÉ`);
-    console.log(`💰 Capital final: $${this.capital.toFixed(2)}`);
+    console.log(`⏸️  BOT v11.1 STOPPÉ`);
+    console.log(`💰 Capital: $${this.capital.toFixed(2)}`);
     console.log(`📊 Gross: ${grossPnL >= 0 ? '+' : ''}$${grossPnL.toFixed(2)} | Fees: -$${this.totalFees.toFixed(2)} | NET: ${netPnL >= 0 ? '+' : ''}$${netPnL.toFixed(2)}`);
-    console.log(`📈 ROI NET: ${((netPnL/this.startCapital)*100).toFixed(2)}%`);
+    console.log(`📈 ROI: ${((netPnL/this.startCapital)*100).toFixed(2)}%`);
   }
 
   getStats() {
@@ -572,7 +575,7 @@ class TradingEngine {
       running: this.running,
       currentStake: this.getStake(),
       tradeCount: this.tradeCount,
-      mode: 'BOT v11.0 FINAL',
+      mode: 'BOT v11.1',
       currentPrices, mtfScores,
       pendingProfitTaking: this.pendingProfitTaking
     };
