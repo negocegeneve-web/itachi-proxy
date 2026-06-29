@@ -4,6 +4,7 @@ class StrategyAgent {
       if (!priceData || !Array.isArray(priceData) || priceData.length < 21) {
         return { action: 'HOLD', q: 0, rsi: 50, direction: 'NONE', emaFast: 0, emaSlow: 0, momentum: 0, atr: 0, marketMode: 'CALM' };
       }
+
       const emaFast = this.calcEMA(priceData, 8);
       const emaSlow = this.calcEMA(priceData, 21);
       const rsi = this.calcRSI(priceData, 14);
@@ -20,11 +21,12 @@ class StrategyAgent {
       let direction = 'NONE';
       let q = 0;
 
+      // ✅ EXTREME → PAUSE
       if (marketMode === 'EXTREME') {
         return { action: 'HOLD', q: 0, rsi: parseFloat(rsi.toFixed(2)), direction: 'NONE', emaFast, emaSlow, momentum, momentum5, ma20, atr: parseFloat(atr.toFixed(4)), marketMode };
       }
 
-      // Signal LONG
+      // ✅ Signal LONG
       if (emaFast > emaSlow && last > ma20 && momentum > 0 && rsi > 30 && rsi < 70) {
         action = 'BUY'; direction = 'LONG'; q = 55;
         const spread = (emaFast - emaSlow) / emaSlow * 100;
@@ -34,7 +36,7 @@ class StrategyAgent {
         if (rsi >= 40 && rsi <= 60) q += 15;
         else if (rsi >= 35 && rsi <= 65) q += 8;
       }
-      // Signal SHORT
+      // ✅ Signal SHORT
       else if (emaFast < emaSlow && last < ma20 && momentum < 0 && rsi > 30 && rsi < 70) {
         action = 'SELL'; direction = 'SHORT'; q = 55;
         const spread = (emaSlow - emaFast) / emaSlow * 100;
@@ -45,8 +47,9 @@ class StrategyAgent {
         else if (rsi >= 35 && rsi <= 65) q += 8;
       }
 
-      if (rsi < 30 && momentum > 0) { action = 'BUY'; direction = 'LONG'; q = Math.max(q, 60); }
-      if (rsi > 70 && momentum < 0) { action = 'SELL'; direction = 'SHORT'; q = Math.max(q, 60); }
+      // RSI extrêmes
+      if (rsi < 30 && momentum > 0) { action = 'BUY'; direction = 'LONG'; q = Math.max(q, 65); }
+      if (rsi > 70 && momentum < 0) { action = 'SELL'; direction = 'SHORT'; q = Math.max(q, 65); }
 
       q = Math.min(100, Math.max(0, q));
 
@@ -107,28 +110,41 @@ class StrategyAgent {
 }
 
 class RiskAgent {
-  validate(signal, portfolio) {
+  validate(signal, portfolio, assetConfig) {
     if (!signal || !portfolio) {
-      return { approved: false, leverage: 7, tp: 0.008, sl: 0.004, direction: 'NONE', marketMode: 'CALM' };
+      return { approved: false, leverage: 5, tp: 0.008, sl: 0.004, direction: 'NONE', marketMode: 'CALM' };
     }
 
-    // ✅ Levier basé UNIQUEMENT sur Q score
+    const mode = signal.marketMode || 'CALM';
+    const atr = signal.atr || 0;
+
+    // ✅ Skip si ATR trop faible (marché mort)
+    if (atr < 0.08) {
+      return { approved: false, leverage: 3, tp: 0.008, sl: 0.004, direction: signal.direction, marketMode: mode, skipReason: 'ATR_TOO_LOW' };
+    }
+
+    // ✅ Levier basé sur Q score UNIQUEMENT
     let leverage = 3;
     if (signal.q >= 80) leverage = 12;
-    else if (signal.q >= 55) leverage = 7;
+    else if (signal.q >= 65) leverage = 7;
     else leverage = 3;
 
-    // ✅ TP/SL basés UNIQUEMENT sur mode marché
-    let tp = 0.008;
-    let sl = 0.004;
-    const mode = signal.marketMode || 'CALM';
+    // ✅ TP/SL selon mode marché + config asset
+    let tp = assetConfig ? assetConfig.tp : 0.008;
+    let sl = assetConfig ? assetConfig.sl : 0.004;
 
-    if (mode === 'VOLATILE') { tp = 0.025; sl = 0.010; }
-    else if (mode === 'NORMAL') { tp = 0.015; sl = 0.007; }
-    else { tp = 0.008; sl = 0.004; }
+    if (mode === 'VOLATILE') {
+      tp = assetConfig ? assetConfig.tpVolatile : 0.025;
+      sl = assetConfig ? assetConfig.slVolatile : 0.010;
+    } else if (mode === 'NORMAL') {
+      tp = assetConfig ? assetConfig.tpNormal : 0.015;
+      sl = assetConfig ? assetConfig.slNormal : 0.007;
+    }
 
     const approved = (signal.action === 'BUY' || signal.action === 'SELL') &&
-                     signal.q >= 50 && mode !== 'EXTREME';
+                     signal.q >= 65 &&
+                     mode !== 'EXTREME' &&
+                     atr >= 0.08;
 
     return { approved, leverage, tp, sl, direction: signal.direction, marketMode: mode };
   }
@@ -168,7 +184,10 @@ class LearningAgent {
     const stats = this.assetStats[symbol];
     if (!stats || stats.trades < 10) return true;
     const wr = stats.wins / stats.trades;
-    if (wr < 0.40) { console.log(`⛔ ${symbol}: WR ${(wr*100).toFixed(1)}% < 40% → PAUSE`); return false; }
+    if (wr < 0.35) {
+      console.log(`⛔ ${symbol}: WR ${(wr*100).toFixed(1)}% < 35% → PAUSE`);
+      return false;
+    }
     return true;
   }
 
@@ -179,10 +198,11 @@ class LearningAgent {
 }
 
 class TradingSwarm {
-  constructor() {
+  constructor(assetConfig) {
     this.strategy = new StrategyAgent();
     this.risk = new RiskAgent();
     this.learning = new LearningAgent();
+    this.assetConfig = assetConfig;
     this.lastLeverage = 7;
     this.lastTP = 0.008;
     this.lastSL = 0.004;
@@ -192,7 +212,7 @@ class TradingSwarm {
 
   coordinate(priceData, portfolio) {
     const sig = this.strategy.analyze(priceData);
-    const risk = this.risk.validate(sig, portfolio);
+    const risk = this.risk.validate(sig, portfolio, this.assetConfig);
     this.lastLeverage = risk.leverage;
     this.lastTP = risk.tp;
     this.lastSL = risk.sl;
@@ -206,7 +226,8 @@ class TradingSwarm {
       tp: risk.tp, sl: risk.sl,
       emaFast: sig.emaFast, emaSlow: sig.emaSlow,
       momentum: sig.momentum, ma20: sig.ma20,
-      atr: sig.atr, marketMode: risk.marketMode
+      atr: sig.atr, marketMode: risk.marketMode,
+      skipReason: risk.skipReason
     };
   }
 
