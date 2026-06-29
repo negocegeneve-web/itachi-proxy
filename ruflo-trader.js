@@ -25,7 +25,6 @@ class StrategyAgent {
         return { action: 'HOLD', q: 0, rsi: parseFloat(rsi.toFixed(2)), direction: 'NONE', emaFast, emaSlow, momentum, momentum5, ma20, atr: parseFloat(atr.toFixed(4)), marketMode };
       }
 
-      // Signal LONG
       if (emaFast > emaSlow && last > ma20 && momentum > 0 && rsi > 30 && rsi < 70) {
         action = 'BUY'; direction = 'LONG'; q = 55;
         const spread = (emaFast - emaSlow) / emaSlow * 100;
@@ -34,9 +33,7 @@ class StrategyAgent {
         q += Math.min(15, momStrength * 2000);
         if (rsi >= 40 && rsi <= 60) q += 15;
         else if (rsi >= 35 && rsi <= 65) q += 8;
-      }
-      // Signal SHORT
-      else if (emaFast < emaSlow && last < ma20 && momentum < 0 && rsi > 30 && rsi < 70) {
+      } else if (emaFast < emaSlow && last < ma20 && momentum < 0 && rsi > 30 && rsi < 70) {
         action = 'SELL'; direction = 'SHORT'; q = 55;
         const spread = (emaSlow - emaFast) / emaSlow * 100;
         q += Math.min(15, spread * 300);
@@ -108,29 +105,27 @@ class StrategyAgent {
 }
 
 class RiskAgent {
-  validate(signal, portfolio, assetConfig) {
+  validate(signal, portfolio) {
     if (!signal || !portfolio) {
-      return { approved: false, leverage: 7, tp: 0.020, sl: 0.010, direction: 'NONE', marketMode: 'CALM' };
+      return { approved: false, leverage: 7, tp: 0.020, sl: 0.006, direction: 'NONE', marketMode: 'CALM' };
     }
 
     const mode = signal.marketMode || 'CALM';
 
-    // ✅ Levier selon Q score UNIQUEMENT
+    // ✅ Levier selon Q score
     let leverage = 7;
     if (signal.q >= 80) leverage = 10;
     else if (signal.q >= 55) leverage = 7;
     else leverage = 5;
 
-    // ✅ TP/SL selon mode marché
-    // CALM    : TP +2%   SL -1%
-    // NORMAL  : TP +2%   SL -1%   (même base, marché plus actif)
-    // VOLATILE: TP +2%   SL -1%   (trailing SL après TP laisse courir)
-    // → TP toujours +2% minimum
-    // → SL toujours -1%
-    // → La différence est dans le trailing SL après TP
+    // ✅ SL selon mode marché
+    let sl = 0.006; // CALM : -0.6%
+    if (mode === 'VOLATILE') sl = 0.010;
+    else if (mode === 'NORMAL') sl = 0.008;
+    else sl = 0.006;
 
-    const tp = 0.020; // ✅ Toujours +2%
-    const sl = 0.010; // ✅ Toujours -1%
+    // ✅ TP final toujours +2%
+    const tp = 0.020;
 
     const approved = (signal.action === 'BUY' || signal.action === 'SELL') &&
                      signal.q >= 70 &&
@@ -201,7 +196,7 @@ class TradingSwarm {
     this.learning = new LearningAgent();
     this.lastLeverage = 7;
     this.lastTP = 0.020;
-    this.lastSL = 0.010;
+    this.lastSL = 0.006;
     this.lastDirection = 'NONE';
     this.lastMarketMode = 'CALM';
   }
